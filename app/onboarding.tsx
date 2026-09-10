@@ -78,10 +78,19 @@ export default function OnboardingScreen() {
     AsyncStorage.getItem('has_completed_onboarding')
       .then(async (val) => {
         if (val === 'true') {
+          const path = await AsyncStorage.getItem('user_path');
+          if (path === 'explorer') {
+            router.replace('/explore');
+            return;
+          }
           const hasCurriculum =
             (await AsyncStorage.getItem('has_selected_grade_and_subjects')) === 'true' ||
             Boolean(await AsyncStorage.getItem('user_grade'));
-          router.replace(hasCurriculum ? '/home' : '/select-grade');
+          if (path === 'learner' || (!path && hasCurriculum)) {
+            router.replace(hasCurriculum ? '/home' : '/select-grade');
+            return;
+          }
+          router.replace('/choose-path');
         }
       })
       .catch(() => {});
@@ -128,7 +137,7 @@ export default function OnboardingScreen() {
     } catch (e) {
       console.warn('Failed to save onboarding completion', e);
     }
-    router.replace('/select-grade');
+    router.replace('/choose-path');
   };
 
   const handleNext = () => {
@@ -759,7 +768,7 @@ const styles = StyleSheet.create({
     position: "relative",
   },
   haloGradient: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     borderRadius: 150,
     opacity: 0.7,
   },

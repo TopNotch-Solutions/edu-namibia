@@ -27,17 +27,29 @@ export default function SplashScreen() {
   const textTranslateY = useRef(new Animated.Value(12)).current;
 
   const hasNavigated = useRef(false);
-  const targetRouteRef = useRef<'/home' | '/select-grade' | '/onboarding'>('/onboarding');
+  const targetRouteRef = useRef<
+    '/home' | '/explore' | '/select-grade' | '/choose-path' | '/onboarding'
+  >('/onboarding');
 
-  const getDestinationRoute = async (): Promise<'/home' | '/select-grade' | '/onboarding'> => {
+  const getDestinationRoute = async (): Promise<
+    '/home' | '/explore' | '/select-grade' | '/choose-path' | '/onboarding'
+  > => {
     try {
       const hasOnboarded = await AsyncStorage.getItem('has_completed_onboarding');
       if (hasOnboarded === 'true') {
+        const path = await AsyncStorage.getItem('user_path');
+        if (path === 'explorer') return '/explore';
+
         const hasSelectedCurriculum =
           (await AsyncStorage.getItem('has_selected_grade_and_subjects')) === 'true' ||
           Boolean(await AsyncStorage.getItem('user_grade'));
 
-        return hasSelectedCurriculum ? '/home' : '/select-grade';
+        if (path === 'learner' || (!path && hasSelectedCurriculum)) {
+          return hasSelectedCurriculum ? '/home' : '/select-grade';
+        }
+
+        // Onboarded but no path chosen yet
+        return '/choose-path';
       }
       return '/onboarding';
     } catch {

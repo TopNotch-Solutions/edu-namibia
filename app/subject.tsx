@@ -1,8 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Image } from 'expo-image';
-import { LinearGradient } from 'expo-linear-gradient';
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useMemo, useState } from 'react';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Animated,
@@ -21,10 +20,20 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CURRICULUM_SUBJECTS, getSubjectById, SubjectOption } from '@/constants/curriculum';
 import {
+  getAllQuizSets,
+  getTopicBestSummary,
+  getTopicEntries,
+  getQuizSetsForTopic,
+  isQuizCompleted,
+  loadSubjectQuizProgress,
+  sessionKey,
+  SubjectQuizProgressMap,
+  type QuizModeKey,
+} from '@/constants/quizProgress';
+import {
   ContentModule,
   getSubjectStudyData,
   LessonSubtopic,
-  QuizQuestion,
   SubjectStudyData,
   TextbookItem,
 } from '@/constants/subjectData';
@@ -33,13 +42,10 @@ import { getNextUnrepeatedFact, SubjectFact } from '@/constants/subjectFacts';
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 // Official Namibian colors
-const NAMIBIA_BLUE = '#002B7F';
-const NAMIBIA_RED = '#D21034';
 const NAMIBIA_GREEN = '#009A44';
-const NAMIBIA_YELLOW = '#FFCE00';
 
 type StudyTab = 'content' | 'quizzes' | 'textbooks' | 'summaries';
-type QuizMode = 'topicPractice' | 'speedRun' | 'pastPapers';
+type QuizMode = QuizModeKey;
 
 export default function SubjectScreen() {
   const router = useRouter();
@@ -68,7 +74,7 @@ export default function SubjectScreen() {
 
   // Gamification & User Stats
   const [xp, setXp] = useState<number>(350);
-  const [streak, setStreak] = useState<number>(3);
+  const [streak] = useState<number>(3);
 
   // Tab 1: Content Module Accordion State
   const [expandedModuleId, setExpandedModuleId] = useState<string>(studyData.modules[0]?.id || 'mod-1');
@@ -76,12 +82,9 @@ export default function SubjectScreen() {
     'sub-1-1': true,
   });
 
-  // Tab 2: Quiz State
+  // Tab 2: Quiz hub state
   const [quizMode, setQuizMode] = useState<QuizMode>('topicPractice');
-  const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(0);
-  const [selectedOptionIndex, setSelectedOptionIndex] = useState<number | null>(null);
-  const [hasAnswered, setHasAnswered] = useState<boolean>(false);
-  const [quizScore, setQuizScore] = useState<number>(0);
+  const [quizProgressMap, setQuizProgressMap] = useState<SubjectQuizProgressMap>({});
   const [showLeaderboard, setShowLeaderboard] = useState<boolean>(false);
 
   // Tab 3: Textbooks E-Reader State
@@ -163,54 +166,73 @@ export default function SubjectScreen() {
     });
   };
 
-  // Current active questions list based on selected quiz mode
-  const currentQuizQuestions: QuizQuestion[] = useMemo(() => {
-    if (quizMode === 'speedRun') return studyData.quizQuestions.speedRun;
-    if (quizMode === 'pastPapers') return studyData.quizQuestions.pastPapers;
-    return studyData.quizQuestions.topicPractice;
-  }, [studyData, quizMode]);
+  // Refresh quiz progress when returning from quiz page
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      loadSubjectQuizProgress(resolvedSubject.id).then((map) => {
+        if (active) setQuizProgressMap(map);
+      });
+      return () => {
+        active = false;
+      };
+    }, [resolvedSubject.id])
+  );
 
-  const activeQuestion = currentQuizQuestions[currentQuestionIndex] || currentQuizQuestions[0];
+  // Topic practice cards (2-column)
+  const topicPracticeEntries = useMemo(
+    () => getTopicEntries(studyData.quizQuestions.topicPractice),
+    [studyData]
+  );
 
-  const handleSelectQuizOption = (optionIndex: number) => {
-    if (hasAnswered) return;
-    setSelectedOptionIndex(optionIndex);
-    setHasAnswered(true);
+  const pastPaperEntries = useMemo(
+    () => getTopicEntries(studyData.quizQuestions.pastPapers),
+    [studyData]
+  );
 
-    const isCorrect = optionIndex === activeQuestion.correctIndex;
-    if (isCorrect) {
-      setQuizScore((prev) => prev + 1);
-      const earnedXp = streak >= 3 ? 75 : 50;
-      saveXp(xp + earnedXp);
-      setStreak((prev) => prev + 1);
-    } else {
-      setStreak(1);
-    }
+  const openTopicQuizzes = (topic: string, mode: QuizMode = 'topicPractice') => {
+    router.push({
+      pathname: '/topic-quizzes',
+      params: {
+        id: resolvedSubject.id,
+        grade: activeGrade,
+        topic,
+        mode,
+      },
+    });
   };
 
-  const handleNextQuestion = () => {
-    if (currentQuestionIndex < currentQuizQuestions.length - 1) {
-      setCurrentQuestionIndex((prev) => prev + 1);
-      setSelectedOptionIndex(null);
-      setHasAnswered(false);
-    } else {
-      Alert.alert(
-        'Quiz Round Completed! 🎉',
-        `Great effort! You answered ${quizScore + (selectedOptionIndex === activeQuestion.correctIndex ? 1 : 0)} of ${currentQuizQuestions.length} questions correctly.`,
-        [
-          {
-            text: 'Play Again',
-            onPress: () => {
-              setCurrentQuestionIndex(0);
-              setSelectedOptionIndex(null);
-              setHasAnswered(false);
-              setQuizScore(0);
-            },
-          },
-          { text: 'Done', style: 'cancel' },
-        ]
-      );
-    }
+  const openCompetitionQuiz = (
+    topic: string,
+    quizId: string,
+    resume = false,
+    review = false
+  ) => {
+    router.push({
+      pathname: '/quiz',
+      params: {
+        id: resolvedSubject.id,
+        grade: activeGrade,
+        mode: 'competition',
+        topic,
+        quizId,
+        resume: resume ? '1' : '0',
+        review: review ? '1' : '0',
+      },
+    });
+  };
+
+  const openQuiz = (mode: QuizMode, topic?: string, resume = false) => {
+    router.push({
+      pathname: '/quiz',
+      params: {
+        id: resolvedSubject.id,
+        grade: activeGrade,
+        mode,
+        topic: topic || '',
+        resume: resume ? '1' : '0',
+      },
+    });
   };
 
   const toggleBookDownload = (bookId: string) => {
@@ -244,13 +266,11 @@ export default function SubjectScreen() {
           </Text>
         </View>
 
-        {/* Gamified XP Pill */}
         <Pressable
           onPress={() => setShowLeaderboard(true)}
           style={({ pressed }) => [styles.xpChip, pressed && styles.pressedState]}
           hitSlop={8}
         >
-          <Text style={styles.xpChipIcon}>⚡</Text>
           <Text style={styles.xpChipText}>{xp} XP</Text>
         </Pressable>
       </View>
@@ -268,16 +288,11 @@ export default function SubjectScreen() {
             <View style={styles.subjectHeroCard}>
               <Image
                 source={{ uri: resolvedSubject.namibianImage }}
-                style={StyleSheet.absoluteFillObject}
+                style={StyleSheet.absoluteFill}
                 contentFit="cover"
                 priority="high"
               />
-              <LinearGradient
-                colors={['rgba(2, 6, 23, 0.35)', 'rgba(0, 43, 127, 0.78)', '#020617']}
-                locations={[0, 0.5, 1]}
-                style={StyleSheet.absoluteFillObject}
-              />
-              <View style={styles.heroSunStripe} />
+              <View style={styles.heroOverlay} />
 
               <View style={styles.heroInnerContent}>
                 <View style={styles.heroPillRow}>
@@ -292,25 +307,22 @@ export default function SubjectScreen() {
                       style={({ pressed }) => [styles.heroFactPill, pressed && styles.pressedState]}
                       hitSlop={6}
                     >
-                      <Text style={styles.heroFactPillText}>💡 Did You Know?</Text>
+                      <Text style={styles.heroFactPillText}>Did You Know?</Text>
                     </Pressable>
                     <View style={styles.heroStreakPill}>
-                      <Text style={styles.heroStreakPillText}>🔥 {streak}x</Text>
+                      <Text style={styles.heroStreakPillText}>{streak}x streak</Text>
                     </View>
                   </View>
                 </View>
 
                 <Text style={styles.heroTitle}>{resolvedSubject.name}</Text>
-                <Text style={styles.heroContextSubtitle}>
-                  🇳🇦 {resolvedSubject.namibianContext}
-                </Text>
+                <Text style={styles.heroContextSubtitle}>{resolvedSubject.namibianContext}</Text>
 
                 {didYouKnowFact && (
                   <Pressable
                     onPress={() => setShowDidYouKnowModal(true)}
                     style={({ pressed }) => [styles.heroFactBanner, pressed && styles.pressedState]}
                   >
-                    <Text style={styles.heroFactBannerIcon}>💡</Text>
                     <Text style={styles.heroFactBannerText} numberOfLines={1}>
                       Fact: {didYouKnowFact.title}
                     </Text>
@@ -409,13 +421,13 @@ export default function SubjectScreen() {
                               </View>
 
                               <View style={styles.durationPill}>
-                                <Text style={styles.durationText}>⏱ {subtopic.durationMinutes} min</Text>
+                                <Text style={styles.durationText}>{subtopic.durationMinutes} min</Text>
                               </View>
                             </View>
 
                             {/* Concept Explanation Card */}
                             <View style={styles.conceptBox}>
-                              <Text style={styles.conceptBoxTitle}>📖 Quick Concept Explanation</Text>
+                              <Text style={styles.conceptBoxTitle}>Quick Concept Explanation</Text>
                               <Text style={styles.conceptText}>{subtopic.conceptSummary}</Text>
                             </View>
 
@@ -424,7 +436,7 @@ export default function SubjectScreen() {
                               <View style={styles.workedExampleBox}>
                                 <View style={styles.workedExampleHeader}>
                                   <Text style={styles.workedExampleTitle}>
-                                    🧮 Worked-Out Calculation Example
+                                    Worked-Out Calculation Example
                                   </Text>
                                   <View style={styles.examMarkBadge}>
                                     <Text style={styles.examMarkText}>Full Exam Method</Text>
@@ -468,28 +480,24 @@ export default function SubjectScreen() {
                             {/* Video / Animated Diagram Embed Banner */}
                             {subtopic.diagramTitle && (
                               <View style={styles.diagramEmbedCard}>
-                                <LinearGradient
-                                  colors={['#0F172A', '#1E293B']}
-                                  style={styles.diagramGradient}
-                                >
+                                <View style={styles.diagramBody}>
                                   <View style={styles.diagramHeaderRow}>
                                     <View style={styles.diagramBadge}>
-                                      <Text style={styles.diagramBadgeText}>DIAGRAM & VISUAL EMBED</Text>
+                                      <Text style={styles.diagramBadgeText}>DIAGRAM</Text>
                                     </View>
-                                    <Text style={styles.playIconText}>▶ 3D Model</Text>
+                                    <Text style={styles.playIconText}>View</Text>
                                   </View>
                                   <Text style={styles.diagramTitleText}>{subtopic.diagramTitle}</Text>
                                   <Text style={styles.diagramConceptText}>
                                     {subtopic.diagramConcept}
                                   </Text>
-                                </LinearGradient>
+                                </View>
                               </View>
                             )}
 
                             {/* Key Namibian Exam Tip Callout Box */}
                             <View style={styles.examTipCard}>
                               <View style={styles.examTipTop}>
-                                <Text style={styles.examTipIcon}>⚠️</Text>
                                 <Text style={styles.examTipTitle}>KEY NAMIBIAN EXAM TIP</Text>
                               </View>
                               <Text style={styles.examTipText}>{subtopic.examTip}</Text>
@@ -505,7 +513,7 @@ export default function SubjectScreen() {
                               ]}
                             >
                               <Text style={[styles.completeLessonText, isDone && styles.completeLessonTextDone]}>
-                                {isDone ? '✓ Completed (+25 XP Earned)' : 'Mark Lesson Complete (+25 XP) →'}
+                                {isDone ? '✓ Completed' : 'Mark Lesson Complete →'}
                               </Text>
                             </Pressable>
                           </View>
@@ -519,30 +527,19 @@ export default function SubjectScreen() {
           </ScrollView>
         )}
 
-        {/* TAB 2: QUIZZES (GAMIFIED REVISION) */}
+        {/* TAB 2: QUIZZES HUB */}
         {activeTab === 'quizzes' && (
           <ScrollView
             style={styles.tabScrollView}
             contentContainerStyle={styles.tabScrollContent}
             showsVerticalScrollIndicator={false}
           >
-            {/* Gamification Bar */}
-            <View style={styles.quizGamificationCard}>
-              <View style={styles.quizGamificationRow}>
-                <View style={styles.streakIndicatorBox}>
-                  <Text style={styles.streakFlame}>🔥</Text>
-                  <View>
-                    <Text style={styles.streakMultiplierText}>{streak}x Streak Active</Text>
-                    <Text style={styles.streakBonusSub}>Earn up to +75 XP per question</Text>
-                  </View>
-                </View>
-
-                <Pressable
-                  onPress={() => setShowLeaderboard(true)}
-                  style={({ pressed }) => [styles.leaderboardBtn, pressed && styles.pressedState]}
-                >
-                  <Text style={styles.leaderboardBtnText}>🏆 Schools</Text>
-                </Pressable>
+            <View style={styles.sectionHeaderRow}>
+              <View>
+                <Text style={styles.sectionHeading}>Practice Quizzes</Text>
+                <Text style={styles.sectionSubheading}>
+                  Pick a topic, save progress, and track your best score
+                </Text>
               </View>
             </View>
 
@@ -550,24 +547,18 @@ export default function SubjectScreen() {
             <View style={styles.quizModeTabsRow}>
               {(
                 [
-                  { id: 'topicPractice', label: 'Topic Practice', icon: '🎯' },
-                  { id: 'speedRun', label: 'Speed Run', icon: '⚡' },
-                  { id: 'pastPapers', label: 'Past Papers', icon: '📜' },
+                  { id: 'topicPractice', label: 'Topic Practice' },
+                  { id: 'competition', label: 'Competition' },
+                  { id: 'pastPapers', label: 'Past Papers' },
                 ] as const
               ).map((mode) => {
                 const isActive = quizMode === mode.id;
                 return (
                   <Pressable
                     key={mode.id}
-                    onPress={() => {
-                      setQuizMode(mode.id);
-                      setCurrentQuestionIndex(0);
-                      setSelectedOptionIndex(null);
-                      setHasAnswered(false);
-                    }}
+                    onPress={() => setQuizMode(mode.id)}
                     style={[styles.quizModeTab, isActive && styles.quizModeTabActive]}
                   >
-                    <Text style={styles.quizModeTabIcon}>{mode.icon}</Text>
                     <Text
                       style={[styles.quizModeTabText, isActive && styles.quizModeTabTextActive]}
                       numberOfLines={1}
@@ -579,104 +570,291 @@ export default function SubjectScreen() {
               })}
             </View>
 
-            {/* Mode Description Banner */}
-            <View style={styles.modeDescriptionBox}>
-              <Text style={styles.modeDescriptionText}>
-                {quizMode === 'topicPractice' && '🎯 Rapid active recall questions to master each syllabus chapter.'}
-                {quizMode === 'speedRun' && '⚡ Timed challenge mode! Fast answers earn bonus XP and school leaderboard rank.'}
-                {quizMode === 'pastPapers' && '📜 Official NSSCO examination questions categorized by Year & Paper 1/2.'}
-              </Text>
-            </View>
-
-            {/* Question Card */}
-            <View style={styles.questionCard}>
-              <View style={styles.questionMetaHeader}>
-                <View style={styles.questionTopicBadge}>
-                  <Text style={styles.questionTopicText}>{activeQuestion.topic}</Text>
-                </View>
-                <Text style={styles.questionNumberText}>
-                  Question {currentQuestionIndex + 1} of {currentQuizQuestions.length}
+            {quizMode === 'topicPractice' && (
+              <>
+                <Text style={styles.modeDescriptionText}>
+                  Choose a topic, then pick one of its quizzes. Scores and review stay saved.
                 </Text>
-              </View>
+                <View style={styles.topicGrid}>
+                  {topicPracticeEntries.map((entry) => {
+                    const quizSets = getQuizSetsForTopic(
+                      studyData.quizQuestions.topicPractice,
+                      entry.topic
+                    );
+                    const summary = getTopicBestSummary(
+                      quizProgressMap,
+                      'topicPractice',
+                      entry.topic,
+                      quizSets
+                    );
 
-              <Text style={styles.questionPromptText}>{activeQuestion.question}</Text>
+                    const isCompleted =
+                      quizSets.length > 0 && summary.completedCount >= quizSets.length;
 
-              {/* Options List */}
-              <View style={styles.optionsList}>
-                {activeQuestion.options.map((option, optIdx) => {
-                  const isSelected = selectedOptionIndex === optIdx;
-                  const isCorrect = optIdx === activeQuestion.correctIndex;
-                  const badge = ['A', 'B', 'C', 'D'][optIdx];
-
-                  const showCorrect = hasAnswered && isCorrect;
-                  const showIncorrect = hasAnswered && isSelected && !isCorrect;
-                  const showSelectedPreAnswer = !hasAnswered && isSelected;
-
-                  return (
-                    <Pressable
-                      key={optIdx}
-                      onPress={() => handleSelectQuizOption(optIdx)}
-                      disabled={hasAnswered}
-                      style={({ pressed }) => [
-                        styles.optionItem,
-                        showSelectedPreAnswer && styles.optionItemSelected,
-                        showCorrect && styles.optionItemCorrect,
-                        showIncorrect && styles.optionItemIncorrect,
-                        pressed && !hasAnswered && styles.pressedState,
-                      ]}
-                    >
-                      <View style={styles.optionLetterBadge}>
-                        <Text style={styles.optionLetterText}>{badge}</Text>
-                      </View>
-                      <Text
-                        style={[
-                          styles.optionItemText,
-                          showCorrect && styles.optionItemTextCorrect,
-                          showIncorrect && styles.optionItemTextIncorrect,
+                    return (
+                      <Pressable
+                        key={entry.topic}
+                        onPress={() => openTopicQuizzes(entry.topic)}
+                        style={({ pressed }) => [
+                          styles.topicCard,
+                          isCompleted ? styles.topicCardCompleted : styles.topicCardPractice,
+                          pressed && styles.pressedState,
                         ]}
                       >
-                        {option}
-                      </Text>
-                      {showCorrect && <Text style={styles.feedbackIcon}>✓</Text>}
-                      {showIncorrect && <Text style={styles.feedbackIcon}>✗</Text>}
-                    </Pressable>
-                  );
-                })}
-              </View>
+                        <Text
+                          style={[
+                            styles.topicCardTitle,
+                            isCompleted ? styles.topicCardTitleCompleted : styles.topicCardTitlePractice,
+                          ]}
+                          numberOfLines={2}
+                        >
+                          {entry.topic}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.topicCardMeta,
+                            isCompleted ? styles.topicCardMetaCompleted : styles.topicCardMetaPractice,
+                          ]}
+                        >
+                          {entry.quizCount} quiz{entry.quizCount === 1 ? '' : 'zes'} · {entry.count}{' '}
+                          questions
+                        </Text>
 
-              {/* Step-by-Step Solution Card (shown after answer) */}
-              {hasAnswered && (
-                <View style={styles.solutionBox}>
-                  <View style={styles.solutionHeader}>
-                    <Text style={styles.solutionTitle}>
-                      {selectedOptionIndex === activeQuestion.correctIndex
-                        ? '🎉 Correct! Step-by-Step Explanation:'
-                        : '💡 Step-by-Step Solution & Analysis:'}
-                    </Text>
-                  </View>
-                  <Text style={styles.solutionText}>{activeQuestion.explanation}</Text>
-
-                  <Pressable
-                    onPress={handleNextQuestion}
-                    style={({ pressed }) => [styles.nextQuestionBtn, pressed && styles.pressedState]}
-                  >
-                    <LinearGradient
-                      colors={[NAMIBIA_BLUE, '#1A4BB8']}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 0 }}
-                      style={styles.nextQuestionGradient}
-                    >
-                      <View style={styles.buttonSunStripe} />
-                      <Text style={styles.nextQuestionBtnText}>
-                        {currentQuestionIndex < currentQuizQuestions.length - 1
-                          ? 'Next Question →'
-                          : 'Complete Quiz & View Score 🎉'}
-                      </Text>
-                    </LinearGradient>
-                  </Pressable>
+                        {summary.bestLabel && (
+                          <Text
+                            style={[
+                              styles.topicCardScore,
+                              isCompleted
+                                ? styles.topicCardScoreCompleted
+                                : styles.topicCardScorePractice,
+                            ]}
+                          >
+                            Best {summary.bestLabel}
+                          </Text>
+                        )}
+                        {summary.completedCount > 0 && (
+                          <Text
+                            style={[
+                              styles.topicCardMeta,
+                              isCompleted
+                                ? styles.topicCardMetaCompleted
+                                : styles.topicCardMetaPractice,
+                            ]}
+                          >
+                            Completed {summary.completedCount}/{entry.quizCount}
+                          </Text>
+                        )}
+                        <Text
+                          style={[
+                            styles.topicStartHint,
+                            isCompleted
+                              ? styles.topicStartHintCompleted
+                              : styles.topicStartHintPractice,
+                          ]}
+                        >
+                          View quizzes →
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
                 </View>
-              )}
-            </View>
+              </>
+            )}
+
+            {quizMode === 'competition' && (
+              <>
+                <Text style={styles.modeDescriptionText}>
+                  One-time national challenge rounds. Each competition appears only once — finish it
+                  to lock your score.
+                </Text>
+                {(() => {
+                  const allSets = getAllQuizSets(studyData.quizQuestions.competition);
+                  const available = allSets.filter(
+                    (set) =>
+                      !isQuizCompleted(quizProgressMap, 'competition', set.topic, set.quizId)
+                  );
+                  const completed = allSets.filter((set) =>
+                    isQuizCompleted(quizProgressMap, 'competition', set.topic, set.quizId)
+                  );
+
+                  return (
+                    <>
+                      <Text style={styles.competitionSectionLabel}>Available now</Text>
+                      {available.length === 0 ? (
+                        <View style={styles.quizLaunchCard}>
+                          <Text style={styles.quizLaunchBody}>
+                            No open competitions right now. Completed rounds are listed below for
+                            review only.
+                          </Text>
+                        </View>
+                      ) : (
+                        available.map((set) => {
+                          const key = sessionKey('competition', set.topic, set.quizId);
+                          const progress = quizProgressMap[key];
+                          const hasResume = Boolean(progress?.inProgress);
+                          return (
+                            <Pressable
+                              key={`${set.topic}-${set.quizId}`}
+                              onPress={() =>
+                                openCompetitionQuiz(set.topic, set.quizId, hasResume)
+                              }
+                              style={({ pressed }) => [
+                                styles.competitionCard,
+                                pressed && styles.pressedState,
+                              ]}
+                            >
+                              <View style={styles.competitionCardTop}>
+                                <Text style={styles.competitionOnceBadge}>One attempt</Text>
+                                <Text style={styles.competitionCardTitle}>{set.quizTitle}</Text>
+                                <Text style={styles.competitionCardMeta}>
+                                  {set.topic} · {set.questions.length} questions
+                                </Text>
+                              </View>
+                              <Text style={styles.topicStartHint}>
+                                {hasResume ? 'Resume competition →' : 'Enter competition →'}
+                              </Text>
+                            </Pressable>
+                          );
+                        })
+                      )}
+
+                      {completed.length > 0 && (
+                        <>
+                          <Text style={[styles.competitionSectionLabel, { marginTop: 18 }]}>
+                            Completed (review only)
+                          </Text>
+                          {completed.map((set) => {
+                            const key = sessionKey('competition', set.topic, set.quizId);
+                            const progress = quizProgressMap[key];
+                            return (
+                              <View key={`${set.topic}-${set.quizId}`} style={styles.competitionCardDone}>
+                                <Text style={styles.competitionCardTitle}>{set.quizTitle}</Text>
+                                <Text style={styles.competitionCardMeta}>
+                                  Score {progress?.lastScore}/{progress?.lastTotal}
+                                  {(progress?.bestTotal || 0) > 0
+                                    ? ` · Best ${progress?.bestScore}/${progress?.bestTotal}`
+                                    : ''}
+                                </Text>
+                                <Pressable
+                                  onPress={() =>
+                                    openCompetitionQuiz(set.topic, set.quizId, false, true)
+                                  }
+                                  style={({ pressed }) => [
+                                    styles.competitionReviewBtn,
+                                    pressed && styles.pressedState,
+                                  ]}
+                                >
+                                  <Text style={styles.competitionReviewBtnText}>Review answers</Text>
+                                </Pressable>
+                              </View>
+                            );
+                          })}
+                        </>
+                      )}
+                    </>
+                  );
+                })()}
+              </>
+            )}
+
+            {quizMode === 'pastPapers' && (
+              <>
+                <Text style={styles.modeDescriptionText}>
+                  Choose an exam year, then pick a paper quiz. Scores and review stay saved.
+                </Text>
+                <View style={styles.topicGrid}>
+                  {pastPaperEntries.map((entry) => {
+                    const quizSets = getQuizSetsForTopic(
+                      studyData.quizQuestions.pastPapers,
+                      entry.topic
+                    );
+                    const summary = getTopicBestSummary(
+                      quizProgressMap,
+                      'pastPapers',
+                      entry.topic,
+                      quizSets
+                    );
+                    const yearLabel = entry.topic.replace(/^NSSCO\s+/i, '');
+                    const isCompleted =
+                      quizSets.length > 0 && summary.completedCount >= quizSets.length;
+
+                    return (
+                      <Pressable
+                        key={entry.topic}
+                        onPress={() => openTopicQuizzes(entry.topic, 'pastPapers')}
+                        style={({ pressed }) => [
+                          styles.topicCard,
+                          isCompleted ? styles.topicCardCompleted : styles.topicCardPractice,
+                          pressed && styles.pressedState,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.topicCardTitle,
+                            isCompleted ? styles.topicCardTitleCompleted : styles.topicCardTitlePractice,
+                          ]}
+                          numberOfLines={2}
+                        >
+                          {entry.topic}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.topicCardMeta,
+                            isCompleted ? styles.topicCardMetaCompleted : styles.topicCardMetaPractice,
+                          ]}
+                        >
+                          {entry.quizCount} quiz{entry.quizCount === 1 ? '' : 'zes'} · {entry.count}{' '}
+                          questions
+                        </Text>
+                        <Text
+                          style={[
+                            styles.topicCardMeta,
+                            isCompleted ? styles.topicCardMetaCompleted : styles.topicCardMetaPractice,
+                          ]}
+                        >
+                          Year {yearLabel}
+                        </Text>
+
+                        {summary.bestLabel && (
+                          <Text
+                            style={[
+                              styles.topicCardScore,
+                              isCompleted
+                                ? styles.topicCardScoreCompleted
+                                : styles.topicCardScorePractice,
+                            ]}
+                          >
+                            Best {summary.bestLabel}
+                          </Text>
+                        )}
+                        {summary.completedCount > 0 && (
+                          <Text
+                            style={[
+                              styles.topicCardMeta,
+                              isCompleted
+                                ? styles.topicCardMetaCompleted
+                                : styles.topicCardMetaPractice,
+                            ]}
+                          >
+                            Completed {summary.completedCount}/{entry.quizCount}
+                          </Text>
+                        )}
+                        <Text
+                          style={[
+                            styles.topicStartHint,
+                            isCompleted
+                              ? styles.topicStartHintCompleted
+                              : styles.topicStartHintPractice,
+                          ]}
+                        >
+                          View quizzes →
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </>
+            )}
           </ScrollView>
         )}
 
@@ -733,7 +911,7 @@ export default function SubjectScreen() {
                 const isDownloaded = downloadedBookIds[book.id];
                 return (
                   <View key={book.id} style={styles.textbookCard}>
-                    <View style={[styles.bookSpine, { backgroundColor: book.coverColor }]} />
+                    <View style={styles.bookSpine} />
 
                     <View style={styles.bookMainContent}>
                       <View style={styles.bookBadgeRow}>
@@ -751,11 +929,11 @@ export default function SubjectScreen() {
                       <Text style={styles.bookPublisher}>Publisher: {book.publisher}</Text>
 
                       <View style={styles.bookMetaDetails}>
-                        <Text style={styles.bookMetaItem}>📄 {book.pages} Pages</Text>
+                        <Text style={styles.bookMetaItem}>{book.pages} Pages</Text>
                         <Text style={styles.bookMetaDot}>•</Text>
-                        <Text style={styles.bookMetaItem}>📦 {book.fileSize}</Text>
+                        <Text style={styles.bookMetaItem}>{book.fileSize}</Text>
                         <Text style={styles.bookMetaDot}>•</Text>
-                        <Text style={styles.bookMetaItem}>🔖 {book.chapters.length} Chapters</Text>
+                        <Text style={styles.bookMetaItem}>{book.chapters.length} Chapters</Text>
                       </View>
 
                       {/* Action buttons */}
@@ -768,7 +946,7 @@ export default function SubjectScreen() {
                           }}
                           style={({ pressed }) => [styles.readBookBtn, pressed && styles.pressedState]}
                         >
-                          <Text style={styles.readBookBtnText}>📖 Open E-Reader</Text>
+                          <Text style={styles.readBookBtnText}>Open E-Reader</Text>
                         </Pressable>
 
                         <Pressable
@@ -852,7 +1030,7 @@ export default function SubjectScreen() {
             {(summarySectionFilter === 'All' || summarySectionFilter === 'Formulas') && (
               <View style={styles.summaryGroup}>
                 <View style={styles.groupHeaderRow}>
-                  <Text style={styles.groupTitle}>📐 Essential Formulas & Units</Text>
+                  <Text style={styles.groupTitle}>Essential Formulas & Units</Text>
                   <Text style={styles.groupCountBadge}>
                     {studyData.summaries.formulas.length} Formulas
                   </Text>
@@ -877,7 +1055,7 @@ export default function SubjectScreen() {
                     </View>
 
                     <View style={styles.examCautionBox}>
-                      <Text style={styles.examCautionText}>⚡ Exam Note: {item.examCaution}</Text>
+                      <Text style={styles.examCautionText}>Exam Note: {item.examCaution}</Text>
                     </View>
                   </View>
                 ))}
@@ -888,7 +1066,7 @@ export default function SubjectScreen() {
             {(summarySectionFilter === 'All' || summarySectionFilter === 'Definitions') && (
               <View style={styles.summaryGroup}>
                 <View style={styles.groupHeaderRow}>
-                  <Text style={styles.groupTitle}>📖 Syllabus Definitions & Glossary</Text>
+                  <Text style={styles.groupTitle}>Syllabus Definitions & Glossary</Text>
                   <Text style={styles.groupCountBadge}>
                     {studyData.summaries.definitions.length} Terms
                   </Text>
@@ -918,7 +1096,7 @@ export default function SubjectScreen() {
             {(summarySectionFilter === 'All' || summarySectionFilter === 'MindMaps') && (
               <View style={styles.summaryGroup}>
                 <View style={styles.groupHeaderRow}>
-                  <Text style={styles.groupTitle}>🧠 Mind Maps & Visual Flowcharts</Text>
+                  <Text style={styles.groupTitle}>Mind Maps & Visual Flowcharts</Text>
                   <Text style={styles.groupCountBadge}>
                     {studyData.summaries.mindMaps.length} Maps
                   </Text>
@@ -931,7 +1109,6 @@ export default function SubjectScreen() {
                     style={({ pressed }) => [styles.mindMapCard, pressed && styles.pressedState]}
                   >
                     <View style={styles.mindMapHeader}>
-                      <Text style={styles.mindMapIcon}>🗺️</Text>
                       <View style={styles.mindMapTitleBox}>
                         <Text style={styles.mindMapTitle}>{map.title}</Text>
                         <Text style={styles.mindMapDesc}>{map.description}</Text>
@@ -945,7 +1122,7 @@ export default function SubjectScreen() {
                         </View>
                       ))}
                       <View style={styles.viewMapPill}>
-                        <Text style={styles.viewMapPillText}>Inspect Map 🔍</Text>
+                        <Text style={styles.viewMapPillText}>Inspect Map →</Text>
                       </View>
                     </View>
                   </Pressable>
@@ -957,7 +1134,7 @@ export default function SubjectScreen() {
             {(summarySectionFilter === 'All' || summarySectionFilter === 'CheatSheets') && (
               <View style={styles.summaryGroup}>
                 <View style={styles.groupHeaderRow}>
-                  <Text style={styles.groupTitle}>📋 1-Page Syllabus Cheat Sheets</Text>
+                  <Text style={styles.groupTitle}>1-Page Syllabus Cheat Sheets</Text>
                   <Text style={styles.groupCountBadge}>High Yield</Text>
                 </View>
 
@@ -967,7 +1144,7 @@ export default function SubjectScreen() {
                       <Text style={styles.cheatSheetTitle}>{cheat.title}</Text>
                       <View style={styles.highFrequencyBadge}>
                         <Text style={styles.highFrequencyText}>
-                          ★ {cheat.examFrequency} Exam Frequency
+                          {cheat.examFrequency} Exam Frequency
                         </Text>
                       </View>
                     </View>
@@ -990,9 +1167,7 @@ export default function SubjectScreen() {
 
       {/* FIXED STEP 4 BOTTOM NAVIGATION BAR */}
       <View style={[styles.bottomNavBar, { paddingBottom: Math.max(insets.bottom, 12) }]}>
-        <View style={styles.bottomNavSunStripe} />
         <View style={styles.tabButtonsRow}>
-          {/* Tab 1: Content */}
           <Pressable
             onPress={() => setActiveTab('content')}
             style={({ pressed }) => [
@@ -1001,14 +1176,12 @@ export default function SubjectScreen() {
               pressed && styles.pressedState,
             ]}
           >
-            <Text style={styles.navTabIcon}>📖</Text>
             <Text style={[styles.navTabLabel, activeTab === 'content' && styles.navTabLabelActive]}>
               Content
             </Text>
             {activeTab === 'content' && <View style={styles.activeTabIndicatorDot} />}
           </Pressable>
 
-          {/* Tab 2: Quizzes */}
           <Pressable
             onPress={() => setActiveTab('quizzes')}
             style={({ pressed }) => [
@@ -1017,14 +1190,12 @@ export default function SubjectScreen() {
               pressed && styles.pressedState,
             ]}
           >
-            <Text style={styles.navTabIcon}>⚡</Text>
             <Text style={[styles.navTabLabel, activeTab === 'quizzes' && styles.navTabLabelActive]}>
               Quizzes
             </Text>
             {activeTab === 'quizzes' && <View style={styles.activeTabIndicatorDot} />}
           </Pressable>
 
-          {/* Tab 3: Textbooks */}
           <Pressable
             onPress={() => setActiveTab('textbooks')}
             style={({ pressed }) => [
@@ -1033,7 +1204,6 @@ export default function SubjectScreen() {
               pressed && styles.pressedState,
             ]}
           >
-            <Text style={styles.navTabIcon}>📚</Text>
             <Text
               style={[styles.navTabLabel, activeTab === 'textbooks' && styles.navTabLabelActive]}
             >
@@ -1042,7 +1212,6 @@ export default function SubjectScreen() {
             {activeTab === 'textbooks' && <View style={styles.activeTabIndicatorDot} />}
           </Pressable>
 
-          {/* Tab 4: Summaries */}
           <Pressable
             onPress={() => setActiveTab('summaries')}
             style={({ pressed }) => [
@@ -1051,7 +1220,6 @@ export default function SubjectScreen() {
               pressed && styles.pressedState,
             ]}
           >
-            <Text style={styles.navTabIcon}>📑</Text>
             <Text
               style={[styles.navTabLabel, activeTab === 'summaries' && styles.navTabLabelActive]}
             >
@@ -1094,14 +1262,13 @@ export default function SubjectScreen() {
                 onPress={() => setShowChapterJumpSheet(true)}
                 style={styles.chapterJumpBtn}
               >
-                <Text style={styles.chapterJumpBtnText}>Chapters 📑</Text>
+                <Text style={styles.chapterJumpBtnText}>Chapters</Text>
               </Pressable>
             </View>
 
             {/* Keyword Search & Highlighter Toolbar */}
             <View style={styles.readerToolbar}>
               <View style={styles.readerSearchBox}>
-                <Text style={styles.readerSearchIcon}>🔍</Text>
                 <TextInput
                   placeholder="Search in book (e.g. Mole, Friction)..."
                   placeholderTextColor="#94A3B8"
@@ -1148,7 +1315,7 @@ export default function SubjectScreen() {
                 <View
                   style={[
                     styles.readerHighlightQuote,
-                    { backgroundColor: activeHighlightColor, borderColor: '#CA8A04' },
+                    { backgroundColor: activeHighlightColor, borderColor: '#E2E8F0' },
                   ]}
                 >
                   <Text style={styles.readerHighlightText}>
@@ -1239,7 +1406,7 @@ export default function SubjectScreen() {
           <View style={styles.modalBackdrop}>
             <View style={[styles.leaderboardCard, { paddingBottom: Math.max(insets.bottom, 24) }]}>
               <View style={styles.leaderboardTop}>
-                <Text style={styles.leaderboardTitle}>🏆 Namibian Schools Leaderboard</Text>
+                <Text style={styles.leaderboardTitle}>Namibian Schools Leaderboard</Text>
                 <Pressable onPress={() => setShowLeaderboard(false)} hitSlop={10}>
                   <Text style={styles.modalCloseText}>✕</Text>
                 </Pressable>
@@ -1250,15 +1417,15 @@ export default function SubjectScreen() {
               </Text>
 
               {[
-                { rank: '1', school: 'St. Paul’s College (Khomas)', xp: '18,420 XP', medal: '🥇' },
-                { rank: '2', school: 'Delta Secondary School Windhoek', xp: '16,950 XP', medal: '🥈' },
-                { rank: '3', school: 'Oshigambo High School (Oshikoto)', xp: '15,200 XP', medal: '🥉' },
-                { rank: '4', school: 'Windhoek High School (WHS)', xp: '14,880 XP', medal: '⭐' },
-                { rank: '5', school: 'Gabriel Taapopi SSS (Ongwediva)', xp: '13,740 XP', medal: '⭐' },
-                { rank: '6', school: 'Swakopmund Secondary School (Erongo)', xp: '12,900 XP', medal: '⭐' },
+                { rank: '1', school: 'St. Paul’s College (Khomas)', xp: '18,420 XP' },
+                { rank: '2', school: 'Delta Secondary School Windhoek', xp: '16,950 XP' },
+                { rank: '3', school: 'Oshigambo High School (Oshikoto)', xp: '15,200 XP' },
+                { rank: '4', school: 'Windhoek High School (WHS)', xp: '14,880 XP' },
+                { rank: '5', school: 'Gabriel Taapopi SSS (Ongwediva)', xp: '13,740 XP' },
+                { rank: '6', school: 'Swakopmund Secondary School (Erongo)', xp: '12,900 XP' },
               ].map((item, idx) => (
                 <View key={idx} style={styles.leaderboardItem}>
-                  <Text style={styles.leaderboardMedal}>{item.medal}</Text>
+                  <Text style={styles.leaderboardMedal}>{item.rank}</Text>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.leaderboardSchoolName}>{item.school}</Text>
                     <Text style={styles.leaderboardRankNum}>Rank #{item.rank}</Text>
@@ -1269,7 +1436,7 @@ export default function SubjectScreen() {
 
               <View style={styles.yourRankBox}>
                 <Text style={styles.yourRankText}>
-                  Your Current Contribution: <Text style={{ fontWeight: '900', color: NAMIBIA_BLUE }}>{xp} XP</Text>
+                  Your Current Contribution: <Text style={{ fontWeight: '900', color: '#0F172A' }}>{xp} XP</Text>
                 </Text>
               </View>
             </View>
@@ -1289,7 +1456,7 @@ export default function SubjectScreen() {
             <View style={[styles.mindMapModalCard, { paddingBottom: Math.max(insets.bottom, 24) }]}>
               <View style={styles.mindMapModalTop}>
                 <Text style={styles.mindMapModalTitle} numberOfLines={1}>
-                  🗺️ {selectedMindMapModal}
+                  {selectedMindMapModal}
                 </Text>
                 <Pressable onPress={() => setSelectedMindMapModal(null)} hitSlop={10}>
                   <Text style={styles.modalCloseText}>✕</Text>
@@ -1319,7 +1486,7 @@ export default function SubjectScreen() {
 
               <Pressable
                 onPress={() => {
-                  Alert.alert('Downloaded 📥', 'Mind map saved to your device photo gallery for quick offline study.');
+                  Alert.alert('Downloaded', 'Mind map saved to your device photo gallery for quick offline study.');
                   setSelectedMindMapModal(null);
                 }}
                 style={styles.downloadMindMapBtn}
@@ -1340,23 +1507,12 @@ export default function SubjectScreen() {
           onRequestClose={() => setShowDidYouKnowModal(false)}
         >
           <View style={styles.didYouKnowBackdrop}>
-            <View style={[styles.didYouKnowCard, { paddingBottom: Math.max(insets.bottom, 20) }]}>
-              {/* Namibian Sun Stripe */}
-              <View style={styles.didYouKnowSunStripe} />
-
-              {/* Top Bar with Badge & Close Button */}
+            <View style={[styles.didYouKnowCard, { paddingBottom: Math.max(insets.bottom, 24) }]}>
+              {/* Top Bar: badge + close */}
               <View style={styles.didYouKnowTopBar}>
                 <View style={styles.didYouKnowBadge}>
-                  <Text style={styles.didYouKnowBadgeFlag}>🇳🇦</Text>
                   <Text style={styles.didYouKnowBadgeText}>DID YOU KNOW?</Text>
                 </View>
-
-                <View style={styles.didYouKnowCounterBadge}>
-                  <Text style={styles.didYouKnowCounterText}>
-                    100 Facts Archive • Never Repeats
-                  </Text>
-                </View>
-
                 <Pressable
                   onPress={() => setShowDidYouKnowModal(false)}
                   style={styles.didYouKnowCloseBtn}
@@ -1366,72 +1522,41 @@ export default function SubjectScreen() {
                 </Pressable>
               </View>
 
-              {/* Subject & Location Meta */}
-              <View style={styles.didYouKnowMetaRow}>
-                <View style={styles.didYouKnowSubjectTag}>
-                  <Text style={styles.didYouKnowSubjectTagText}>
-                    {resolvedSubject.icon} {resolvedSubject.name}
-                  </Text>
-                </View>
-                <View style={styles.didYouKnowLocationTag}>
-                  <Text style={styles.didYouKnowLocationTagText} numberOfLines={1}>
-                    📍 {didYouKnowFact.namibianLocationOrContext}
-                  </Text>
-                </View>
+              {/* Centered icon */}
+              <View style={styles.didYouKnowIconSquare}>
+                <Text style={styles.didYouKnowBigIcon}>{didYouKnowFact.icon}</Text>
               </View>
 
-              {/* Fact Title */}
+              {/* Title + fact */}
               <Text style={styles.didYouKnowTitle}>{didYouKnowFact.title}</Text>
+              <ScrollView
+                style={styles.didYouKnowFactScroll}
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={styles.didYouKnowFactScrollContent}
+              >
+                <Text style={styles.didYouKnowFactText}>{didYouKnowFact.fact}</Text>
+              </ScrollView>
 
-              {/* Fact Main Content Box */}
-              <View style={styles.didYouKnowContentBox}>
-                <View style={styles.didYouKnowIconCircle}>
-                  <Text style={styles.didYouKnowBigIcon}>{didYouKnowFact.icon}</Text>
-                </View>
-                <ScrollView style={styles.didYouKnowFactScroll} showsVerticalScrollIndicator={false}>
-                  <Text style={styles.didYouKnowFactText}>{didYouKnowFact.fact}</Text>
-                </ScrollView>
-              </View>
-
-              {/* Syllabus Tag Box */}
-              <View style={styles.didYouKnowSyllabusBox}>
-                <Text style={styles.didYouKnowSyllabusLabel}>Syllabus Connection:</Text>
-                <Text style={styles.didYouKnowSyllabusText}>
-                  📚 {didYouKnowFact.syllabusTag}
+              {/* Highlight / syllabus inset */}
+              <View style={styles.didYouKnowHighlightBox}>
+                <Text style={styles.didYouKnowHighlightLabel} numberOfLines={2}>
+                  {didYouKnowFact.syllabusTag.toUpperCase()}
+                </Text>
+                <Text style={styles.didYouKnowHighlightMain}>
+                  {didYouKnowFact.namibianLocationOrContext}
+                </Text>
+                <Text style={styles.didYouKnowHighlightSub}>
+                  {resolvedSubject.name} · +15 XP curiosity bonus
                 </Text>
               </View>
 
-              {/* XP Bonus Bar */}
-              <View style={styles.didYouKnowXpReward}>
-                <Text style={styles.didYouKnowXpRewardText}>
-                  ⚡ +15 XP Curiosity Bonus Added!
-                </Text>
-              </View>
-
-              {/* Action Buttons */}
-              <View style={styles.didYouKnowActionRow}>
-                <Pressable
-                  onPress={() => fetchNewFact(true)}
-                  style={({ pressed }) => [styles.didYouKnowNextBtn, pressed && styles.pressedState]}
-                >
-                  <Text style={styles.didYouKnowNextBtnText}>Another Fact 🔄</Text>
-                </Pressable>
-
-                <Pressable
-                  onPress={() => setShowDidYouKnowModal(false)}
-                  style={({ pressed }) => [styles.didYouKnowStartBtn, pressed && styles.pressedState]}
-                >
-                  <LinearGradient
-                    colors={[NAMIBIA_BLUE, '#1A4BB8']}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 0 }}
-                    style={styles.didYouKnowStartGradient}
-                  >
-                    <View style={styles.buttonSunStripe} />
-                    <Text style={styles.didYouKnowStartText}>Start Studying 🚀</Text>
-                  </LinearGradient>
-                </Pressable>
-              </View>
+              {/* Green Got it button */}
+              <Pressable
+                onPress={() => setShowDidYouKnowModal(false)}
+                style={({ pressed }) => [styles.didYouKnowGotItBtn, pressed && styles.pressedState]}
+              >
+                <Text style={styles.didYouKnowGotItText}>Got it</Text>
+              </Pressable>
             </View>
           </View>
         </Modal>
@@ -1472,7 +1597,7 @@ const styles = StyleSheet.create({
   backBtnIcon: {
     fontSize: 18,
     fontWeight: '800',
-    color: NAMIBIA_BLUE,
+    color: '#0F172A',
   },
   navTitleGroup: {
     flex: 1,
@@ -1492,20 +1617,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: '#FEF3C7',
+    backgroundColor: '#F1F5F9',
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#FDE68A',
-  },
-  xpChipIcon: {
-    fontSize: 13,
+    borderColor: '#E2E8F0',
   },
   xpChipText: {
     fontSize: 12,
     fontWeight: '900',
-    color: '#B45309',
+    color: '#0F172A',
   },
 
   // Main Content Area
@@ -1544,14 +1666,9 @@ const styles = StyleSheet.create({
       },
     }),
   },
-  heroSunStripe: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 3.5,
-    backgroundColor: NAMIBIA_YELLOW,
-    zIndex: 2,
+  heroOverlay: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: 'rgba(15, 23, 42, 0.72)',
   },
   heroInnerContent: {
     flex: 1,
@@ -1583,23 +1700,25 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   heroFactPill: {
-    backgroundColor: '#FEF3C7',
+    backgroundColor: 'rgba(255, 255, 255, 0.18)',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#FDE68A',
+    borderColor: 'rgba(255, 255, 255, 0.25)',
   },
   heroFactPillText: {
     fontSize: 10,
     fontWeight: '900',
-    color: '#92400E',
+    color: '#FFFFFF',
   },
   heroStreakPill: {
-    backgroundColor: 'rgba(210, 16, 52, 0.88)',
+    backgroundColor: 'rgba(15, 23, 42, 0.85)',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
   },
   heroStreakPillText: {
     fontSize: 11,
@@ -1609,28 +1728,25 @@ const styles = StyleSheet.create({
   heroFactBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(254, 243, 199, 0.95)',
+    backgroundColor: 'rgba(255, 255, 255, 0.14)',
     paddingHorizontal: 12,
     paddingVertical: 7,
     borderRadius: 12,
     marginVertical: 4,
     gap: 6,
     borderWidth: 1,
-    borderColor: '#FDE68A',
-  },
-  heroFactBannerIcon: {
-    fontSize: 13,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
   },
   heroFactBannerText: {
     flex: 1,
     fontSize: 11,
     fontWeight: '800',
-    color: '#78350F',
+    color: '#F8FAFC',
   },
   heroFactBannerArrow: {
     fontSize: 12,
     fontWeight: '900',
-    color: '#92400E',
+    color: '#E2E8F0',
   },
   heroTitle: {
     fontSize: 22,
@@ -1717,9 +1833,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   accordionHeaderActive: {
-    backgroundColor: '#F0F7FF',
+    backgroundColor: '#F8FAFC',
     borderBottomWidth: 1,
-    borderBottomColor: '#DBEAFE',
+    borderBottomColor: '#E2E8F0',
   },
   accordionHeaderLeft: {
     flexDirection: 'row',
@@ -1736,7 +1852,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   unitBadgeActive: {
-    backgroundColor: NAMIBIA_BLUE,
+    backgroundColor: '#0F172A',
   },
   unitBadgeText: {
     fontSize: 13,
@@ -1768,18 +1884,18 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   expandChevronActive: {
-    backgroundColor: '#DBEAFE',
+    backgroundColor: '#E2E8F0',
   },
   expandChevronText: {
     fontSize: 10,
     fontWeight: '800',
-    color: NAMIBIA_BLUE,
+    color: '#334155',
   },
 
   // Subtopics list inside expanded accordion
   subtopicsContainer: {
     padding: 14,
-    backgroundColor: '#FAFCFF',
+    backgroundColor: '#F8FAFC',
     gap: 14,
   },
   subtopicCard: {
@@ -1809,8 +1925,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   checkboxBoxDone: {
-    borderColor: NAMIBIA_GREEN,
-    backgroundColor: NAMIBIA_GREEN,
+    borderColor: '#0F172A',
+    backgroundColor: '#0F172A',
   },
   checkMark: {
     color: '#FFFFFF',
@@ -1823,7 +1939,7 @@ const styles = StyleSheet.create({
   subtopicNumber: {
     fontSize: 11,
     fontWeight: '800',
-    color: NAMIBIA_BLUE,
+    color: '#64748B',
   },
   subtopicTitle: {
     fontSize: 14,
@@ -1848,13 +1964,13 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     padding: 10,
     marginBottom: 10,
-    borderLeftWidth: 3,
-    borderLeftColor: NAMIBIA_BLUE,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
   conceptBoxTitle: {
     fontSize: 11,
     fontWeight: '800',
-    color: NAMIBIA_BLUE,
+    color: '#334155',
     marginBottom: 4,
   },
   conceptText: {
@@ -1865,12 +1981,12 @@ const styles = StyleSheet.create({
 
   // Worked-out calculation box
   workedExampleBox: {
-    backgroundColor: '#F0FDF4',
+    backgroundColor: '#FFFFFF',
     borderRadius: 12,
     padding: 12,
     marginBottom: 10,
     borderWidth: 1,
-    borderColor: '#BBF7D0',
+    borderColor: '#E2E8F0',
   },
   workedExampleHeader: {
     flexDirection: 'row',
@@ -1881,10 +1997,10 @@ const styles = StyleSheet.create({
   workedExampleTitle: {
     fontSize: 12,
     fontWeight: '800',
-    color: '#166534',
+    color: '#0F172A',
   },
   examMarkBadge: {
-    backgroundColor: '#DCFCE7',
+    backgroundColor: '#F1F5F9',
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 6,
@@ -1892,32 +2008,32 @@ const styles = StyleSheet.create({
   examMarkText: {
     fontSize: 9,
     fontWeight: '800',
-    color: '#15803D',
+    color: '#475569',
   },
   problemStatementText: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#14532D',
+    color: '#334155',
     marginBottom: 8,
     lineHeight: 17,
   },
   givenVariablesBox: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#F8FAFC',
     borderRadius: 8,
     padding: 8,
     marginBottom: 8,
     borderWidth: 1,
-    borderColor: '#DCFCE7',
+    borderColor: '#E2E8F0',
   },
   givenTitle: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#15803D',
+    color: '#475569',
     marginBottom: 3,
   },
   givenItemText: {
     fontSize: 11,
-    color: '#166534',
+    color: '#334155',
     lineHeight: 16,
   },
   stepsBox: {
@@ -1927,7 +2043,7 @@ const styles = StyleSheet.create({
   stepsTitle: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#15803D',
+    color: '#475569',
     marginBottom: 2,
   },
   stepRow: {
@@ -1939,7 +2055,7 @@ const styles = StyleSheet.create({
     width: 16,
     height: 16,
     borderRadius: 8,
-    backgroundColor: '#166534',
+    backgroundColor: '#0F172A',
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 2,
@@ -1952,23 +2068,23 @@ const styles = StyleSheet.create({
   stepText: {
     flex: 1,
     fontSize: 11,
-    color: '#14532D',
+    color: '#334155',
     lineHeight: 16,
   },
   finalAnswerBox: {
-    backgroundColor: '#DCFCE7',
+    backgroundColor: '#F1F5F9',
     padding: 8,
     borderRadius: 8,
   },
   finalAnswerLabel: {
     fontSize: 10,
     fontWeight: '700',
-    color: '#166534',
+    color: '#475569',
   },
   finalAnswerText: {
     fontSize: 12,
     fontWeight: '800',
-    color: '#14532D',
+    color: '#0F172A',
   },
 
   // Diagram Embed
@@ -1977,8 +2093,9 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     marginBottom: 10,
   },
-  diagramGradient: {
+  diagramBody: {
     padding: 12,
+    backgroundColor: '#0F172A',
   },
   diagramHeaderRow: {
     flexDirection: 'row',
@@ -1995,12 +2112,12 @@ const styles = StyleSheet.create({
   diagramBadgeText: {
     fontSize: 9,
     fontWeight: '800',
-    color: '#93C5FD',
+    color: '#CBD5E1',
   },
   playIconText: {
     fontSize: 11,
     fontWeight: '700',
-    color: NAMIBIA_YELLOW,
+    color: '#E2E8F0',
   },
   diagramTitleText: {
     fontSize: 13,
@@ -2016,12 +2133,12 @@ const styles = StyleSheet.create({
 
   // Namibian Exam Tip
   examTipCard: {
-    backgroundColor: '#FFFBEB',
+    backgroundColor: '#F8FAFC',
     borderRadius: 10,
     padding: 10,
     marginBottom: 10,
     borderWidth: 1,
-    borderColor: '#FDE68A',
+    borderColor: '#E2E8F0',
   },
   examTipTop: {
     flexDirection: 'row',
@@ -2029,111 +2146,60 @@ const styles = StyleSheet.create({
     gap: 4,
     marginBottom: 3,
   },
-  examTipIcon: {
-    fontSize: 12,
-  },
   examTipTitle: {
     fontSize: 10,
     fontWeight: '900',
-    color: '#B45309',
+    color: '#334155',
     letterSpacing: 0.5,
   },
   examTipText: {
     fontSize: 11,
-    color: '#78350F',
+    color: '#475569',
     lineHeight: 16,
     fontWeight: '500',
   },
 
   // Complete Lesson CTA
   completeLessonBtn: {
-    backgroundColor: '#EFF6FF',
+    backgroundColor: '#F1F5F9',
     paddingVertical: 9,
     borderRadius: 10,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#BFDBFE',
+    borderColor: '#E2E8F0',
   },
   completeLessonBtnDone: {
-    backgroundColor: '#ECFDF5',
-    borderColor: '#A7F3D0',
+    backgroundColor: '#F8FAFC',
+    borderColor: '#CBD5E1',
   },
   completeLessonText: {
     fontSize: 12,
     fontWeight: '700',
-    color: NAMIBIA_BLUE,
+    color: '#0F172A',
   },
   completeLessonTextDone: {
-    color: '#065F46',
+    color: '#334155',
   },
 
-  // TAB 2: Quizzes
-  quizGamificationCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 14,
-    marginBottom: 12,
-    borderWidth: 1.5,
-    borderColor: '#E2E8F0',
-  },
-  quizGamificationRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  streakIndicatorBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  streakFlame: {
-    fontSize: 24,
-  },
-  streakMultiplierText: {
-    fontSize: 14,
-    fontWeight: '900',
-    color: '#B45309',
-  },
-  streakBonusSub: {
-    fontSize: 11,
-    color: '#64748B',
-  },
-  leaderboardBtn: {
-    backgroundColor: '#EFF6FF',
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#BFDBFE',
-  },
-  leaderboardBtnText: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: NAMIBIA_BLUE,
-  },
+  // TAB 2: Quizzes hub
   quizModeTabsRow: {
     flexDirection: 'row',
     gap: 8,
-    marginBottom: 10,
+    marginBottom: 12,
   },
   quizModeTab: {
     flex: 1,
-    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
     backgroundColor: '#FFFFFF',
     paddingVertical: 10,
     borderRadius: 12,
-    borderWidth: 1.5,
+    borderWidth: 1,
     borderColor: '#E2E8F0',
   },
   quizModeTabActive: {
-    backgroundColor: NAMIBIA_BLUE,
-    borderColor: NAMIBIA_BLUE,
-  },
-  quizModeTabIcon: {
-    fontSize: 13,
+    backgroundColor: '#0F172A',
+    borderColor: '#0F172A',
   },
   quizModeTabText: {
     fontSize: 11,
@@ -2143,167 +2209,193 @@ const styles = StyleSheet.create({
   quizModeTabTextActive: {
     color: '#FFFFFF',
   },
-  modeDescriptionBox: {
-    backgroundColor: '#EFF6FF',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 10,
-    marginBottom: 12,
-  },
   modeDescriptionText: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '600',
-    color: '#1E40AF',
-    lineHeight: 16,
-  },
-
-  // Question Card
-  questionCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    padding: 16,
-    borderWidth: 1.5,
-    borderColor: '#E2E8F0',
-  },
-  questionMetaHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 10,
-  },
-  questionTopicBadge: {
-    backgroundColor: '#F1F5F9',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  questionTopicText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: NAMIBIA_BLUE,
-  },
-  questionNumberText: {
-    fontSize: 11,
-    fontWeight: '700',
     color: '#64748B',
+    lineHeight: 18,
+    marginBottom: 14,
   },
-  questionPromptText: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#0F172A',
-    lineHeight: 22,
-    marginBottom: 16,
-  },
-  optionsList: {
-    gap: 10,
-  },
-  optionItem: {
+  topicGrid: {
     flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F8FAFC',
-    borderRadius: 12,
-    padding: 12,
-    borderWidth: 1.5,
-    borderColor: '#E2E8F0',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    rowGap: 12,
   },
-  optionItemSelected: {
-    borderColor: NAMIBIA_BLUE,
-    backgroundColor: '#F0F7FF',
-  },
-  optionItemCorrect: {
-    borderColor: NAMIBIA_GREEN,
-    backgroundColor: '#ECFDF5',
-  },
-  optionItemIncorrect: {
-    borderColor: NAMIBIA_RED,
-    backgroundColor: '#FEF2F2',
-  },
-  optionLetterBadge: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+  topicCard: {
+    width: '48.5%',
     backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
+    borderRadius: 16,
+    padding: 14,
     borderWidth: 1,
+    borderColor: '#E2E8F0',
+    minHeight: 132,
+  },
+  topicCardPractice: {
+    backgroundColor: '#ECFDF5',
+    borderColor: '#009A44',
+  },
+  topicCardCompleted: {
+    backgroundColor: '#F1F5F9',
     borderColor: '#CBD5E1',
   },
-  optionLetterText: {
+  topicCardTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0F172A',
+    lineHeight: 19,
+    marginBottom: 6,
+  },
+  topicCardTitlePractice: {
+    color: '#14532D',
+  },
+  topicCardTitleCompleted: {
+    color: '#64748B',
+  },
+  topicCardMeta: {
     fontSize: 11,
+    fontWeight: '600',
+    color: '#64748B',
+    marginBottom: 8,
+  },
+  topicCardMetaPractice: {
+    color: '#166534',
+  },
+  topicCardMetaCompleted: {
+    color: '#94A3B8',
+  },
+  topicCardScore: {
+    fontSize: 12,
     fontWeight: '800',
     color: '#334155',
+    marginBottom: 8,
   },
-  optionItemText: {
-    flex: 1,
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#1E293B',
-    lineHeight: 18,
+  topicCardScorePractice: {
+    color: '#15803D',
   },
-  optionItemTextCorrect: {
-    flex: 1,
-    fontSize: 13,
+  topicCardScoreCompleted: {
+    color: '#64748B',
+  },
+  topicResumePill: {
+    marginTop: 'auto',
+    alignSelf: 'flex-start',
+    backgroundColor: '#0F172A',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+  },
+  topicResumeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  topicStartHint: {
+    marginTop: 'auto',
+    fontSize: 12,
     fontWeight: '700',
-    color: '#065F46',
+    color: '#0F172A',
   },
-  optionItemTextIncorrect: {
-    flex: 1,
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#991B1B',
+  topicStartHintPractice: {
+    color: '#009A44',
   },
-  feedbackIcon: {
-    fontSize: 16,
-    fontWeight: '900',
-    marginLeft: 6,
+  topicStartHintCompleted: {
+    color: '#94A3B8',
   },
-
-  // Solution Box
-  solutionBox: {
-    marginTop: 16,
-    padding: 14,
-    borderRadius: 14,
-    backgroundColor: '#F8FAFC',
+  quizLaunchCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    padding: 18,
     borderWidth: 1,
     borderColor: '#E2E8F0',
   },
-  solutionHeader: {
-    marginBottom: 6,
+  quizLaunchTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0F172A',
+    marginBottom: 8,
   },
-  solutionTitle: {
+  quizLaunchBody: {
+    fontSize: 13,
+    color: '#64748B',
+    lineHeight: 20,
+    marginBottom: 12,
+  },
+  quizLaunchScore: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#334155',
+    marginBottom: 14,
+  },
+  quizLaunchBtn: {
+    backgroundColor: '#0F172A',
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  quizLaunchBtnText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  competitionSectionLabel: {
     fontSize: 13,
     fontWeight: '800',
     color: '#0F172A',
+    marginBottom: 10,
   },
-  solutionText: {
-    fontSize: 12,
-    color: '#334155',
-    lineHeight: 18,
-    marginBottom: 12,
+  competitionCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 10,
   },
-  nextQuestionBtn: {
-    borderRadius: 12,
-    overflow: 'hidden',
+  competitionCardDone: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 10,
   },
-  nextQuestionGradient: {
-    paddingVertical: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
+  competitionCardTop: {
+    marginBottom: 10,
   },
-  buttonSunStripe: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 3,
-    backgroundColor: NAMIBIA_YELLOW,
-  },
-  nextQuestionBtnText: {
-    color: '#FFFFFF',
-    fontSize: 13,
+  competitionOnceBadge: {
+    alignSelf: 'flex-start',
+    fontSize: 10,
     fontWeight: '800',
+    color: '#475569',
+    backgroundColor: '#F1F5F9',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    overflow: 'hidden',
+    marginBottom: 8,
+  },
+  competitionCardTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0F172A',
+    marginBottom: 4,
+  },
+  competitionCardMeta: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  competitionReviewBtn: {
+    marginTop: 12,
+    backgroundColor: '#002B7F',
+    borderRadius: 12,
+    paddingVertical: 11,
+    alignItems: 'center',
+  },
+  competitionReviewBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
 
   // TAB 3: Textbooks
@@ -2320,8 +2412,8 @@ const styles = StyleSheet.create({
     borderColor: '#E2E8F0',
   },
   textbookCatChipActive: {
-    backgroundColor: NAMIBIA_BLUE,
-    borderColor: NAMIBIA_BLUE,
+    backgroundColor: '#0F172A',
+    borderColor: '#0F172A',
   },
   textbookCatChipText: {
     fontSize: 11,
@@ -2342,6 +2434,7 @@ const styles = StyleSheet.create({
   },
   bookSpine: {
     width: 8,
+    backgroundColor: '#CBD5E1',
   },
   bookMainContent: {
     flex: 1,
@@ -2362,10 +2455,10 @@ const styles = StyleSheet.create({
   bookCategoryText: {
     fontSize: 10,
     fontWeight: '800',
-    color: NAMIBIA_BLUE,
+    color: '#334155',
   },
   offlineStatusChip: {
-    backgroundColor: '#ECFDF5',
+    backgroundColor: '#F1F5F9',
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 6,
@@ -2373,7 +2466,7 @@ const styles = StyleSheet.create({
   offlineStatusText: {
     fontSize: 9,
     fontWeight: '700',
-    color: '#065F46',
+    color: '#475569',
   },
   bookTitle: {
     fontSize: 14,
@@ -2407,7 +2500,7 @@ const styles = StyleSheet.create({
   },
   readBookBtn: {
     flex: 1,
-    backgroundColor: NAMIBIA_BLUE,
+    backgroundColor: '#0F172A',
     paddingVertical: 9,
     borderRadius: 10,
     alignItems: 'center',
@@ -2426,8 +2519,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   downloadBookBtnActive: {
-    borderColor: NAMIBIA_GREEN,
-    backgroundColor: '#ECFDF5',
+    borderColor: '#64748B',
+    backgroundColor: '#F8FAFC',
   },
   downloadBookBtnText: {
     fontSize: 11,
@@ -2435,7 +2528,7 @@ const styles = StyleSheet.create({
     color: '#475569',
   },
   downloadBookBtnTextActive: {
-    color: '#065F46',
+    color: '#0F172A',
   },
 
   // TAB 4: Summaries
@@ -2456,8 +2549,8 @@ const styles = StyleSheet.create({
   groupCountBadge: {
     fontSize: 11,
     fontWeight: '700',
-    color: NAMIBIA_BLUE,
-    backgroundColor: '#EFF6FF',
+    color: '#334155',
+    backgroundColor: '#F1F5F9',
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 8,
@@ -2481,13 +2574,13 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     padding: 10,
     marginBottom: 10,
-    borderLeftWidth: 3,
-    borderLeftColor: NAMIBIA_BLUE,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
   formulaEquationText: {
     fontSize: 14,
     fontWeight: '900',
-    color: NAMIBIA_BLUE,
+    color: '#0F172A',
     letterSpacing: 0.5,
   },
   variableGrid: {
@@ -2515,14 +2608,16 @@ const styles = StyleSheet.create({
     color: '#475569',
   },
   examCautionBox: {
-    backgroundColor: '#FFFBEB',
+    backgroundColor: '#F8FAFC',
     padding: 8,
     borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
   examCautionText: {
     fontSize: 11,
     fontWeight: '600',
-    color: '#B45309',
+    color: '#475569',
   },
 
   // Definitions
@@ -2546,7 +2641,7 @@ const styles = StyleSheet.create({
     color: '#0F172A',
   },
   marksBadge: {
-    backgroundColor: '#EFF6FF',
+    backgroundColor: '#F1F5F9',
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 6,
@@ -2554,7 +2649,7 @@ const styles = StyleSheet.create({
   marksBadgeText: {
     fontSize: 10,
     fontWeight: '800',
-    color: NAMIBIA_BLUE,
+    color: '#334155',
   },
   definitionText: {
     fontSize: 12,
@@ -2563,19 +2658,21 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   keywordHighlightBox: {
-    backgroundColor: '#FEF9C3',
+    backgroundColor: '#F8FAFC',
     padding: 8,
     borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
   keywordHighlightLabel: {
     fontSize: 10,
     fontWeight: '800',
-    color: '#854D0E',
+    color: '#475569',
   },
   keywordHighlightText: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#713F12',
+    color: '#334155',
   },
 
   // Mind Maps
@@ -2592,9 +2689,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     marginBottom: 10,
-  },
-  mindMapIcon: {
-    fontSize: 24,
   },
   mindMapTitleBox: {
     flex: 1,
@@ -2628,7 +2722,7 @@ const styles = StyleSheet.create({
   },
   viewMapPill: {
     marginLeft: 'auto',
-    backgroundColor: '#EFF6FF',
+    backgroundColor: '#F1F5F9',
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,
@@ -2636,7 +2730,7 @@ const styles = StyleSheet.create({
   viewMapPillText: {
     fontSize: 10,
     fontWeight: '800',
-    color: NAMIBIA_BLUE,
+    color: '#0F172A',
   },
 
   // Cheat Sheet
@@ -2661,7 +2755,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   highFrequencyBadge: {
-    backgroundColor: '#FEF2F2',
+    backgroundColor: '#F1F5F9',
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 6,
@@ -2669,7 +2763,7 @@ const styles = StyleSheet.create({
   highFrequencyText: {
     fontSize: 9,
     fontWeight: '800',
-    color: NAMIBIA_RED,
+    color: '#334155',
   },
   cheatSheetPointsList: {
     gap: 6,
@@ -2681,7 +2775,7 @@ const styles = StyleSheet.create({
   },
   bulletDot: {
     fontSize: 12,
-    color: NAMIBIA_BLUE,
+    color: '#64748B',
     lineHeight: 17,
   },
   cheatPointText: {
@@ -2712,14 +2806,6 @@ const styles = StyleSheet.create({
       },
     }),
   },
-  bottomNavSunStripe: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 3,
-    backgroundColor: NAMIBIA_YELLOW,
-  },
   tabButtonsRow: {
     flexDirection: 'row',
     paddingTop: 8,
@@ -2733,24 +2819,20 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   navTabBtnActive: {},
-  navTabIcon: {
-    fontSize: 20,
-    marginBottom: 3,
-  },
   navTabLabel: {
     fontSize: 11,
     fontWeight: '700',
     color: '#64748B',
   },
   navTabLabelActive: {
-    color: NAMIBIA_BLUE,
+    color: '#0F172A',
     fontWeight: '900',
   },
   activeTabIndicatorDot: {
     width: 4,
     height: 4,
     borderRadius: 2,
-    backgroundColor: NAMIBIA_BLUE,
+    backgroundColor: '#0F172A',
     marginTop: 3,
   },
 
@@ -2775,7 +2857,7 @@ const styles = StyleSheet.create({
   readerBackText: {
     fontSize: 13,
     fontWeight: '700',
-    color: NAMIBIA_BLUE,
+    color: '#0F172A',
   },
   readerBookTitleBox: {
     flex: 1,
@@ -2800,7 +2882,7 @@ const styles = StyleSheet.create({
   chapterJumpBtnText: {
     fontSize: 11,
     fontWeight: '800',
-    color: NAMIBIA_BLUE,
+    color: '#0F172A',
   },
   readerToolbar: {
     flexDirection: 'row',
@@ -2864,7 +2946,7 @@ const styles = StyleSheet.create({
     color: '#0F172A',
     marginBottom: 14,
     borderBottomWidth: 2,
-    borderBottomColor: NAMIBIA_BLUE,
+    borderBottomColor: '#0F172A',
     paddingBottom: 6,
   },
   readerBodyParagraph: {
@@ -2921,7 +3003,7 @@ const styles = StyleSheet.create({
   searchMatchTitle: {
     fontSize: 12,
     fontWeight: '800',
-    color: NAMIBIA_BLUE,
+    color: '#0F172A',
     marginBottom: 4,
   },
   searchMatchItem: {
@@ -2962,7 +3044,7 @@ const styles = StyleSheet.create({
   chapterJumpItemNum: {
     fontSize: 12,
     fontWeight: '800',
-    color: NAMIBIA_BLUE,
+    color: '#0F172A',
     width: 45,
   },
   chapterJumpItemTitle: {
@@ -3026,7 +3108,7 @@ const styles = StyleSheet.create({
   leaderboardXpVal: {
     fontSize: 12,
     fontWeight: '800',
-    color: NAMIBIA_BLUE,
+    color: '#0F172A',
   },
   yourRankBox: {
     backgroundColor: '#EFF6FF',
@@ -3075,7 +3157,7 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   mindMapCentralNode: {
-    backgroundColor: NAMIBIA_BLUE,
+    backgroundColor: '#0F172A',
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderRadius: 12,
@@ -3103,7 +3185,7 @@ const styles = StyleSheet.create({
     color: '#0F172A',
   },
   downloadMindMapBtn: {
-    backgroundColor: NAMIBIA_BLUE,
+    backgroundColor: '#0F172A',
     paddingVertical: 12,
     borderRadius: 12,
     alignItems: 'center',
@@ -3114,250 +3196,145 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
 
-  // MODAL 4: DID YOU KNOW? FACT MODAL STYLES
+  // MODAL 4: DID YOU KNOW? FACT MODAL STYLES (dark card, green CTA)
   didYouKnowBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.72)',
+    backgroundColor: 'rgba(0, 0, 0, 0.72)',
     justifyContent: 'center',
-    padding: 20,
+    padding: 24,
   },
   didYouKnowCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 24,
-    padding: 20,
+    backgroundColor: '#1A1D26',
+    borderRadius: 28,
+    paddingHorizontal: 22,
+    paddingTop: 18,
     overflow: 'hidden',
-    position: 'relative',
-    maxHeight: '90%',
+    maxHeight: '88%',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
     ...Platform.select({
       ios: {
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.25,
-        shadowRadius: 16,
+        shadowOffset: { width: 0, height: 12 },
+        shadowOpacity: 0.45,
+        shadowRadius: 24,
       },
       android: {
-        elevation: 10,
+        elevation: 12,
       },
       web: {
-        boxShadow: '0 8px 24px rgba(0, 0, 0, 0.25)',
+        boxShadow: '0 12px 40px rgba(0, 0, 0, 0.5)',
       },
     }),
-  },
-  didYouKnowSunStripe: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 4,
-    backgroundColor: NAMIBIA_YELLOW,
   },
   didYouKnowTopBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 10,
-    marginTop: 4,
+    marginBottom: 20,
   },
   didYouKnowBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#EFF6FF',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#BFDBFE',
-  },
-  didYouKnowBadgeFlag: {
-    fontSize: 13,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
   },
   didYouKnowBadgeText: {
     fontSize: 11,
-    fontWeight: '900',
-    color: NAMIBIA_BLUE,
-    letterSpacing: 0.8,
-  },
-  didYouKnowCounterBadge: {
-    backgroundColor: '#FEF3C7',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#FDE68A',
-  },
-  didYouKnowCounterText: {
-    fontSize: 10,
     fontWeight: '800',
-    color: '#92400E',
+    color: '#A8ADB8',
+    letterSpacing: 1,
   },
   didYouKnowCloseBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#F1F5F9',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   didYouKnowCloseText: {
     fontSize: 14,
-    fontWeight: '800',
-    color: '#64748B',
-  },
-  didYouKnowMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 8,
-    flexWrap: 'wrap',
-  },
-  didYouKnowSubjectTag: {
-    backgroundColor: '#F1F5F9',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  didYouKnowSubjectTagText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#334155',
-  },
-  didYouKnowLocationTag: {
-    backgroundColor: '#FEF3C7',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  didYouKnowLocationTagText: {
-    fontSize: 10,
     fontWeight: '700',
-    color: '#92400E',
+    color: '#E8EAED',
   },
-  didYouKnowTitle: {
-    fontSize: 18,
-    fontWeight: '900',
-    color: '#0F172A',
-    marginBottom: 12,
-    letterSpacing: -0.3,
-    lineHeight: 24,
-  },
-  didYouKnowContentBox: {
-    backgroundColor: '#F8FAFC',
-    borderRadius: 16,
-    padding: 14,
-    marginBottom: 12,
-    borderWidth: 1.5,
-    borderColor: '#E2E8F0',
-    flexDirection: 'row',
-    gap: 12,
-    alignItems: 'flex-start',
-  },
-  didYouKnowIconCircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#EFF6FF',
+  didYouKnowIconSquare: {
+    alignSelf: 'center',
+    width: 64,
+    height: 64,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#BFDBFE',
+    marginBottom: 18,
   },
   didYouKnowBigIcon: {
-    fontSize: 22,
+    fontSize: 30,
+  },
+  didYouKnowTitle: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    textAlign: 'center',
+    marginBottom: 10,
+    letterSpacing: -0.4,
+    lineHeight: 30,
   },
   didYouKnowFactScroll: {
-    flex: 1,
-    maxHeight: 180,
+    maxHeight: 140,
+    marginBottom: 16,
+  },
+  didYouKnowFactScrollContent: {
+    paddingHorizontal: 4,
   },
   didYouKnowFactText: {
-    fontSize: 13,
-    color: '#1E293B',
-    lineHeight: 20,
+    fontSize: 15,
+    color: '#B8BCC6',
+    lineHeight: 22,
+    textAlign: 'center',
     fontWeight: '500',
   },
-  didYouKnowSyllabusBox: {
-    backgroundColor: '#F0FDF4',
-    padding: 10,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#BBF7D0',
-    marginBottom: 10,
+  didYouKnowHighlightBox: {
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    borderRadius: 16,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    marginBottom: 20,
+    alignItems: 'center',
   },
-  didYouKnowSyllabusLabel: {
+  didYouKnowHighlightLabel: {
     fontSize: 10,
     fontWeight: '800',
-    color: '#166534',
-    marginBottom: 2,
-    textTransform: 'uppercase',
+    color: '#9AA0AB',
+    letterSpacing: 1.2,
+    textAlign: 'center',
+    marginBottom: 10,
   },
-  didYouKnowSyllabusText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#15803D',
-  },
-  didYouKnowXpReward: {
-    backgroundColor: '#FEF3C7',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    alignItems: 'center',
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: '#FDE68A',
-  },
-  didYouKnowXpRewardText: {
-    fontSize: 11,
+  didYouKnowHighlightMain: {
+    fontSize: 18,
     fontWeight: '800',
-    color: '#B45309',
+    color: '#FFFFFF',
+    textAlign: 'center',
+    marginBottom: 6,
+    lineHeight: 24,
   },
-  didYouKnowActionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  didYouKnowNextBtn: {
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    borderRadius: 14,
-    backgroundColor: '#F1F5F9',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: '#CBD5E1',
-  },
-  didYouKnowNextBtnText: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#475569',
-  },
-  didYouKnowStartBtn: {
-    flex: 1,
-    borderRadius: 14,
-    overflow: 'hidden',
-    ...Platform.select({
-      ios: {
-        shadowColor: NAMIBIA_BLUE,
-        shadowOffset: { width: 0, height: 3 },
-        shadowOpacity: 0.2,
-        shadowRadius: 6,
-      },
-      android: {
-        elevation: 3,
-      },
-      web: {
-        boxShadow: '0 3px 10px rgba(0, 43, 127, 0.2)',
-      },
-    }),
-  },
-  didYouKnowStartGradient: {
-    paddingVertical: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
-  },
-  didYouKnowStartText: {
+  didYouKnowHighlightSub: {
     fontSize: 13,
-    fontWeight: '900',
+    fontWeight: '600',
+    color: '#A8ADB8',
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  didYouKnowGotItBtn: {
+    backgroundColor: NAMIBIA_GREEN,
+    borderRadius: 18,
+    paddingVertical: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  didYouKnowGotItText: {
+    fontSize: 16,
+    fontWeight: '800',
     color: '#FFFFFF',
   },
 });

@@ -16,6 +16,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CURRICULUM_SUBJECTS, GRADE_OPTIONS } from '@/constants/curriculum';
+import { setUserPath } from '@/constants/userPath';
 
 // Official Namibian colors
 const NAMIBIA_BLUE = '#002B7F';
@@ -54,7 +55,7 @@ export default function SelectGradeScreen() {
         setCurrentStep(1);
         return true; // handled, returns to Grade selection
       }
-      // On Step 1 (Grade selection), do not navigate back to onboarding
+      router.replace('/choose-path');
       return true;
     };
 
@@ -65,6 +66,8 @@ export default function SelectGradeScreen() {
   const handleBack = () => {
     if (currentStep === 2) {
       setCurrentStep(1);
+    } else {
+      router.replace('/choose-path');
     }
   };
 
@@ -82,6 +85,7 @@ export default function SelectGradeScreen() {
         await AsyncStorage.setItem('user_subjects', JSON.stringify(selectedSubjectIds));
         await AsyncStorage.setItem('has_completed_onboarding', 'true');
         await AsyncStorage.setItem('has_selected_grade_and_subjects', 'true');
+        await setUserPath('learner');
       } catch (e) {
         console.warn('Failed to save selected grade & subjects', e);
       }
@@ -106,18 +110,13 @@ export default function SelectGradeScreen() {
     <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
       {/* Simple Clean Header (No Stepper) */}
       <View style={styles.header}>
-        {currentStep === 2 ? (
-          <Pressable
-            onPress={handleBack}
-            style={({ pressed }) => [styles.backButton, pressed && styles.pressedState]}
-            hitSlop={10}
-          >
-            <Text style={styles.backButtonText}>←</Text>
-          </Pressable>
-        ) : (
-          <View style={styles.headerSideSlot} />
-        )}
-
+        <Pressable
+          onPress={handleBack}
+          style={({ pressed }) => [styles.backButton, pressed && styles.pressedState]}
+          hitSlop={10}
+        >
+          <Text style={styles.backButtonText}>←</Text>
+        </Pressable>
         <Text style={styles.headerTitle}>
           {currentStep === 1 ? 'Select Grade' : 'Select Subjects'}
         </Text>
