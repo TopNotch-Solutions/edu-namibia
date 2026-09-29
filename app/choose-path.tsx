@@ -1,8 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import React from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
+  BackHandler,
   Platform,
   Pressable,
   StyleSheet,
@@ -11,7 +12,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { setUserPath, UserPath } from '@/constants/userPath';
+import { getUserPath, setUserPath, UserPath } from '@/constants/userPath';
 
 const NAMIBIA_BLUE = '#002B7F';
 const NAMIBIA_YELLOW = '#FFCE00';
@@ -20,6 +21,43 @@ const MAP_PIN_PINK = '#E84A7F';
 export default function ChoosePathScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+
+  // Where to return to if the learner opened this from "Edit Setup" and
+  // changed their mind. Null on first run, when there is nowhere to go back to.
+  const [returnRoute, setReturnRoute] = useState<'/home' | '/explore' | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const [path, hasSetup] = await Promise.all([
+          getUserPath(),
+          AsyncStorage.getItem('has_selected_grade_and_subjects'),
+        ]);
+        if (!active) return;
+        if (path === 'explorer') setReturnRoute('/explore');
+        else if (path === 'learner' && hasSetup === 'true') setReturnRoute('/home');
+      } catch (e) {
+        console.warn('Failed to resolve return route', e);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const goBack = useCallback(() => {
+    if (returnRoute) router.replace(returnRoute);
+  }, [returnRoute, router]);
+
+  useEffect(() => {
+    if (!returnRoute) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      goBack();
+      return true;
+    });
+    return () => sub.remove();
+  }, [returnRoute, goBack]);
 
   const selectPath = async (path: UserPath) => {
     try {
@@ -42,6 +80,16 @@ export default function ChoosePathScreen() {
         colors={['#EEF3FB', '#F8FAFC', '#FFFFFF']}
         style={StyleSheet.absoluteFill}
       />
+
+      {returnRoute && (
+        <Pressable
+          onPress={goBack}
+          style={({ pressed }) => [styles.backBar, pressed && styles.pressed]}
+          hitSlop={10}
+        >
+          <Text style={styles.backBarText}>← Back</Text>
+        </Pressable>
+      )}
 
       <View style={styles.content}>
         <Text style={styles.eyebrow}>Edu-Learning Namibia</Text>
@@ -94,6 +142,22 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F8FAFC',
+  },
+  backBar: {
+    alignSelf: 'flex-start',
+    marginLeft: 20,
+    marginTop: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 999,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  backBarText: {
+    fontSize: 13.5,
+    fontWeight: '700',
+    color: '#334155',
   },
   content: {
     flex: 1,

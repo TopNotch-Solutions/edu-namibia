@@ -22,6 +22,7 @@ export default function RootLayout() {
         <Stack.Screen name="region-topic" />
         <Stack.Screen name="region-site" />
         <Stack.Screen name="subject" />
+        <Stack.Screen name="lesson" />
         <Stack.Screen name="topic-quizzes" />
         <Stack.Screen name="quiz" />
       </Stack>

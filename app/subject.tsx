@@ -4,9 +4,6 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
-  Animated,
-  Dimensions,
-  Easing,
   Modal,
   Platform,
   Pressable,
@@ -18,7 +15,21 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { CURRICULUM_SUBJECTS, getSubjectById, SubjectOption } from '@/constants/curriculum';
+import {
+  CURRICULUM_SUBJECTS,
+  getGradeLabel,
+  getSubjectById,
+  resolveGradeId,
+  SubjectOption,
+} from '@/constants/curriculum';
+import { LessonIndex } from '@/components/lessons/LessonIndex';
+import { getLessonUnits } from '@/constants/content';
+import type { GradeId } from '@/constants/lessonTypes';
+import {
+  loadLessonProgressMap,
+  type LessonProgressMap,
+} from '@/constants/lessonProgress';
+import { addXp, getStreak, getXp, recordDailyActivity } from '@/constants/learnerStats';
 import {
   getAllQuizSets,
   getTopicBestSummary,
@@ -31,15 +42,46 @@ import {
   type QuizModeKey,
 } from '@/constants/quizProgress';
 import {
-  ContentModule,
   getSubjectStudyData,
-  LessonSubtopic,
   SubjectStudyData,
   TextbookItem,
 } from '@/constants/subjectData';
 import { getNextUnrepeatedFact, SubjectFact } from '@/constants/subjectFacts';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const SUBTOPIC_XP = 25;
+const FACT_XP = 15;
+
+function subtopicProgressKey(subjectId: string) {
+  return `subtopic_progress_${subjectId}`;
+}
+
+function savedTextbooksKey(subjectId: string) {
+  return `saved_textbooks_${subjectId}`;
+}
+
+async function loadBooleanMap(key: string): Promise<Record<string, boolean>> {
+  try {
+    const raw = await AsyncStorage.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveBooleanMap(key: string, map: Record<string, boolean>) {
+  AsyncStorage.setItem(key, JSON.stringify(map)).catch(() => {});
+}
+
+// Illustrative sample standings until a real leaderboard backend exists.
+const SAMPLE_LEADERBOARD = [
+  { school: 'St. Paul’s College (Khomas)', xp: 18420 },
+  { school: 'Delta Secondary School Windhoek', xp: 16950 },
+  { school: 'Oshigambo High School (Oshikoto)', xp: 15200 },
+  { school: 'Windhoek High School (WHS)', xp: 14880 },
+  { school: 'Gabriel Taapopi SSS (Ongwediva)', xp: 13740 },
+  { school: 'Swakopmund Secondary School (Erongo)', xp: 12900 },
+];
 
 // Official Namibian colors
 const NAMIBIA_GREEN = '#009A44';
@@ -49,7 +91,7 @@ type QuizMode = QuizModeKey;
 
 export default function SubjectScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ id?: string; grade?: string }>();
+  const params = useLocalSearchParams<{ id?: string; gradeId?: string; grade?: string }>();
   const insets = useSafeAreaInsets();
 
   // Selected subject resolution
@@ -62,7 +104,20 @@ export default function SubjectScreen() {
     );
   }, [subjectId]);
 
-  const activeGrade = params.grade || 'Grade 11 (NSSCO)';
+  // The id is what content is keyed by; the label is derived from it. The
+  // legacy `grade` param is still accepted so older navigation paths keep working.
+  // String() keeps this provably a primitive for the React Compiler, which
+  // has no type information and otherwise treats the result as mutable.
+  const gradeId = String(
+    resolveGradeId(params.gradeId || params.grade)
+  ) as GradeId;
+  const activeGrade = getGradeLabel(gradeId);
+
+  // Lesson content for this grade + subject. When there is none, the screen
+  // falls back to the legacy accordion driven by subjectData.ts.
+  const lessonUnits = getLessonUnits(gradeId, resolvedSubject.id);
+  const hasLessons = lessonUnits.length > 0;
+  const [lessonProgressMap, setLessonProgressMap] = useState<LessonProgressMap>({});
 
   // Study data for this subject
   const studyData: SubjectStudyData = useMemo(() => {
@@ -73,14 +128,14 @@ export default function SubjectScreen() {
   const [activeTab, setActiveTab] = useState<StudyTab>('content');
 
   // Gamification & User Stats
-  const [xp, setXp] = useState<number>(350);
-  const [streak] = useState<number>(3);
+  const [xp, setXp] = useState<number>(0);
+  const [streak, setStreak] = useState<number>(0);
 
   // Tab 1: Content Module Accordion State
-  const [expandedModuleId, setExpandedModuleId] = useState<string>(studyData.modules[0]?.id || 'mod-1');
-  const [completedSubtopics, setCompletedSubtopics] = useState<Record<string, boolean>>({
-    'sub-1-1': true,
-  });
+  const [expandedModuleId, setExpandedModuleId] = useState<string>(
+    hasLessons ? '' : studyData.modules[0]?.id || 'mod-1'
+  );
+  const [completedSubtopics, setCompletedSubtopics] = useState<Record<string, boolean>>({});
 
   // Tab 2: Quiz hub state
   const [quizMode, setQuizMode] = useState<QuizMode>('topicPractice');
@@ -89,10 +144,7 @@ export default function SubjectScreen() {
 
   // Tab 3: Textbooks E-Reader State
   const [textbookCategory, setTextbookCategory] = useState<string>('All');
-  const [downloadedBookIds, setDownloadedBookIds] = useState<Record<string, boolean>>({
-    'tb-1': true,
-    'tb-2': true,
-  });
+  const [downloadedBookIds, setDownloadedBookIds] = useState<Record<string, boolean>>({});
   const [activeReaderBook, setActiveReaderBook] = useState<TextbookItem | null>(null);
   const [readerCurrentChapter, setReaderCurrentChapter] = useState<number>(1);
   const [readerSearchTerm, setReaderSearchTerm] = useState<string>('');
@@ -106,64 +158,66 @@ export default function SubjectScreen() {
   // Did You Know State (Unrepeated fact on each subject open)
   const [didYouKnowFact, setDidYouKnowFact] = useState<SubjectFact | null>(null);
   const [showDidYouKnowModal, setShowDidYouKnowModal] = useState<boolean>(false);
-  const [hasAwardedFactXp, setHasAwardedFactXp] = useState<boolean>(false);
-  const [factsProgress, setFactsProgress] = useState<{ total: number; remaining: number }>({
-    total: 100,
-    remaining: 99,
-  });
-
-  const fetchNewFact = async (openModal = true) => {
-    try {
-      const { fact, totalFactsCount, remainingCount } = await getNextUnrepeatedFact(
-        resolvedSubject.id,
-        AsyncStorage
-      );
-      setDidYouKnowFact(fact);
-      setFactsProgress({ total: totalFactsCount, remaining: remainingCount });
-      if (openModal) {
-        setShowDidYouKnowModal(true);
-        if (!hasAwardedFactXp) {
-          setHasAwardedFactXp(true);
-          setXp((prev) => {
-            const nextXp = prev + 15;
-            AsyncStorage.setItem('learner_xp', nextXp.toString()).catch(() => {});
-            return nextXp;
-          });
-        }
-      }
-    } catch (e) {
-      console.warn('Error fetching Did You Know fact', e);
-    }
-  };
-
-  // Automatically fetch an unrepeated fact when the learner opens this subject
+  // Automatically show an unrepeated fact (and award XP once) when the learner opens this subject
   useEffect(() => {
-    fetchNewFact(true);
+    let active = true;
+    (async () => {
+      try {
+        const { fact } = await getNextUnrepeatedFact(resolvedSubject.id, AsyncStorage);
+        if (!active) return;
+        setDidYouKnowFact(fact);
+        setShowDidYouKnowModal(true);
+        const nextXp = await addXp(FACT_XP);
+        if (active) setXp(nextXp);
+      } catch (e) {
+        console.warn('Error fetching Did You Know fact', e);
+      }
+    })();
+    return () => {
+      active = false;
+    };
   }, [resolvedSubject.id]);
 
-  // Load XP from storage
+  // Load saved lesson completion and saved textbooks for this subject
   useEffect(() => {
-    AsyncStorage.getItem('learner_xp').then((savedXp) => {
-      if (savedXp) setXp(parseInt(savedXp, 10));
+    let active = true;
+    Promise.all([
+      loadBooleanMap(subtopicProgressKey(resolvedSubject.id)),
+      loadBooleanMap(savedTextbooksKey(resolvedSubject.id)),
+    ]).then(([subtopics, books]) => {
+      if (!active) return;
+      setCompletedSubtopics(subtopics);
+      setDownloadedBookIds(books);
     });
-  }, []);
+    return () => {
+      active = false;
+    };
+  }, [resolvedSubject.id]);
 
-  const saveXp = async (newXp: number) => {
-    setXp(newXp);
-    try {
-      await AsyncStorage.setItem('learner_xp', newXp.toString());
-    } catch {}
-  };
+  // Refresh XP & streak whenever this screen gains focus (e.g. back from a quiz)
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      recordDailyActivity()
+        .then(() => Promise.all([getXp(), getStreak()]))
+        .then(([savedXp, savedStreak]) => {
+          if (!active) return;
+          setXp(savedXp);
+          setStreak(savedStreak);
+        });
+      return () => {
+        active = false;
+      };
+    }, [])
+  );
 
-  // Toggle Subtopic Completion
+  // Toggle Subtopic Completion (+XP when completed, refunded when un-ticked)
   const toggleSubtopicCompleted = (subtopicId: string) => {
-    setCompletedSubtopics((prev) => {
-      const next = !prev[subtopicId];
-      if (next) {
-        saveXp(xp + 25);
-      }
-      return { ...prev, [subtopicId]: next };
-    });
+    const nowDone = !completedSubtopics[subtopicId];
+    const next = { ...completedSubtopics, [subtopicId]: nowDone };
+    setCompletedSubtopics(next);
+    saveBooleanMap(subtopicProgressKey(resolvedSubject.id), next);
+    addXp(nowDone ? SUBTOPIC_XP : -SUBTOPIC_XP).then(setXp);
   };
 
   // Refresh quiz progress when returning from quiz page
@@ -177,6 +231,19 @@ export default function SubjectScreen() {
         active = false;
       };
     }, [resolvedSubject.id])
+  );
+
+  // Refresh lesson progress when returning from a lesson
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      loadLessonProgressMap(gradeId, resolvedSubject.id).then((map) => {
+        if (active) setLessonProgressMap(map);
+      });
+      return () => {
+        active = false;
+      };
+    }, [gradeId, resolvedSubject.id])
   );
 
   // Topic practice cards (2-column)
@@ -222,28 +289,34 @@ export default function SubjectScreen() {
     });
   };
 
-  const openQuiz = (mode: QuizMode, topic?: string, resume = false) => {
-    router.push({
-      pathname: '/quiz',
-      params: {
-        id: resolvedSubject.id,
-        grade: activeGrade,
-        mode,
-        topic: topic || '',
-        resume: resume ? '1' : '0',
-      },
-    });
+  // Manual "Did You Know?" — shows the next unseen fact (XP is only awarded on subject open)
+  const showAnotherFact = async () => {
+    try {
+      const { fact } = await getNextUnrepeatedFact(resolvedSubject.id, AsyncStorage);
+      setDidYouKnowFact(fact);
+      setShowDidYouKnowModal(true);
+    } catch (e) {
+      console.warn('Error fetching Did You Know fact', e);
+    }
   };
 
   const toggleBookDownload = (bookId: string) => {
-    setDownloadedBookIds((prev) => {
-      const isDownloaded = !prev[bookId];
-      if (isDownloaded) {
-        Alert.alert('Offline Storage Encrypted 📲', 'Textbook downloaded successfully and stored locally for offline revision.');
-      }
-      return { ...prev, [bookId]: isDownloaded };
-    });
+    const isSaved = !downloadedBookIds[bookId];
+    const next = { ...downloadedBookIds, [bookId]: isSaved };
+    setDownloadedBookIds(next);
+    saveBooleanMap(savedTextbooksKey(resolvedSubject.id), next);
+    if (isSaved) {
+      Alert.alert('Saved to My Library 📚', 'This textbook has been added to your saved list on this device.');
+    }
   };
+
+  const leaderboardRows = useMemo(
+    () =>
+      [...SAMPLE_LEADERBOARD, { school: 'You', xp, isYou: true }]
+        .sort((a, b) => b.xp - a.xp)
+        .map((row, index) => ({ ...row, rank: index + 1 })),
+    [xp]
+  );
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -303,7 +376,7 @@ export default function SubjectScreen() {
                   </View>
                   <View style={styles.heroPillsRight}>
                     <Pressable
-                      onPress={() => fetchNewFact(true)}
+                      onPress={showAnotherFact}
                       style={({ pressed }) => [styles.heroFactPill, pressed && styles.pressedState]}
                       hitSlop={6}
                     >
@@ -350,6 +423,18 @@ export default function SubjectScreen() {
                 </View>
               </View>
             </View>
+
+            {/* Paced lesson index — used wherever lesson content exists */}
+            {hasLessons && (
+              <LessonIndex
+                units={lessonUnits}
+                progress={lessonProgressMap}
+                draft
+                onOpenLesson={(lessonId) =>
+                  router.push({ pathname: '/lesson', params: { lessonId } })
+                }
+              />
+            )}
 
             {/* Syllabus Roadmap Title */}
             <View style={styles.sectionHeaderRow}>
@@ -1319,8 +1404,8 @@ export default function SubjectScreen() {
                   ]}
                 >
                   <Text style={styles.readerHighlightText}>
-                    "Key Principle: Always present all intermediate calculation steps clearly in the answer booklet.
-                    Examiners award method marks even when numerical answers deviate due to premature rounding."
+                    &ldquo;Key Principle: Always present all intermediate calculation steps clearly in the answer booklet.
+                    Examiners award method marks even when numerical answers deviate due to premature rounding.&rdquo;
                   </Text>
                 </View>
 
@@ -1344,7 +1429,7 @@ export default function SubjectScreen() {
                 {readerSearchTerm.length > 0 && (
                   <View style={styles.searchMatchCallout}>
                     <Text style={styles.searchMatchTitle}>
-                      Found matches for "{readerSearchTerm}":
+                      Found matches for &ldquo;{readerSearchTerm}&rdquo;:
                     </Text>
                     <Text style={styles.searchMatchItem}>
                       • Chapter {readerCurrentChapter}: 4 occurrences on pages 45, 48, 52.
@@ -1413,30 +1498,32 @@ export default function SubjectScreen() {
               </View>
 
               <Text style={styles.leaderboardSub}>
-                Learners competing across all 14 regions of Namibia this week:
+                Preview with sample school scores. Live rankings arrive once accounts sync online — your XP below is real.
               </Text>
 
-              {[
-                { rank: '1', school: 'St. Paul’s College (Khomas)', xp: '18,420 XP' },
-                { rank: '2', school: 'Delta Secondary School Windhoek', xp: '16,950 XP' },
-                { rank: '3', school: 'Oshigambo High School (Oshikoto)', xp: '15,200 XP' },
-                { rank: '4', school: 'Windhoek High School (WHS)', xp: '14,880 XP' },
-                { rank: '5', school: 'Gabriel Taapopi SSS (Ongwediva)', xp: '13,740 XP' },
-                { rank: '6', school: 'Swakopmund Secondary School (Erongo)', xp: '12,900 XP' },
-              ].map((item, idx) => (
-                <View key={idx} style={styles.leaderboardItem}>
+              {leaderboardRows.map((item) => (
+                <View
+                  key={item.school}
+                  style={[
+                    styles.leaderboardItem,
+                    'isYou' in item && { backgroundColor: '#FEF9C3', borderRadius: 12 },
+                  ]}
+                >
                   <Text style={styles.leaderboardMedal}>{item.rank}</Text>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.leaderboardSchoolName}>{item.school}</Text>
-                    <Text style={styles.leaderboardRankNum}>Rank #{item.rank}</Text>
+                    <Text style={styles.leaderboardRankNum}>
+                      {'isYou' in item ? 'Your progress on this device' : 'Sample'}
+                    </Text>
                   </View>
-                  <Text style={styles.leaderboardXpVal}>{item.xp}</Text>
+                  <Text style={styles.leaderboardXpVal}>{item.xp.toLocaleString()} XP</Text>
                 </View>
               ))}
 
               <View style={styles.yourRankBox}>
                 <Text style={styles.yourRankText}>
-                  Your Current Contribution: <Text style={{ fontWeight: '900', color: '#0F172A' }}>{xp} XP</Text>
+                  Your XP: <Text style={{ fontWeight: '900', color: '#0F172A' }}>{xp} XP</Text>
+                  {streak > 0 ? `  ·  ${streak}-day streak` : ''}
                 </Text>
               </View>
             </View>

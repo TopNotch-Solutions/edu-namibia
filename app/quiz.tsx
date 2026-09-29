@@ -1,6 +1,5 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Animated,
   Easing,
@@ -13,7 +12,8 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { getSubjectById } from '@/constants/curriculum';
+import { CURRICULUM_SUBJECTS, getSubjectById } from '@/constants/curriculum';
+import { addXp, recordDailyActivity } from '@/constants/learnerStats';
 import {
   getQuizSetsForTopic,
   loadSubjectQuizProgress,
@@ -43,7 +43,7 @@ function FallingFlower({
   flower: FlowerSpec;
   fallDistance: number;
 }) {
-  const progress = useRef(new Animated.Value(0)).current;
+  const [progress] = useState(() => new Animated.Value(0));
 
   useEffect(() => {
     const animation = Animated.loop(
@@ -104,19 +104,27 @@ function FallingFlowers() {
   const { width, height } = useWindowDimensions();
   const bandHeight = Math.max(160, Math.round(height * 0.28));
 
+  // Random specs are generated once (lazy state init) rather than during render.
+  const [seeds] = useState(() =>
+    Array.from({ length: 22 }, () => ({
+      left: Math.random(),
+      size: 18 + Math.random() * 14,
+      delay: Math.random() * 1800,
+      duration: 2200 + Math.random() * 1800,
+      drift: (Math.random() - 0.5) * 70,
+      spin: (Math.random() > 0.5 ? 1 : -1) * (160 + Math.random() * 320),
+    }))
+  );
+
   const flowers = useMemo<FlowerSpec[]>(
     () =>
-      Array.from({ length: 22 }, (_, id) => ({
+      seeds.map((seed, id) => ({
+        ...seed,
         id,
         emoji: FLOWER_EMOJIS[id % FLOWER_EMOJIS.length],
-        left: Math.random() * Math.max(width - 28, 1),
-        size: 18 + Math.random() * 14,
-        delay: Math.random() * 1800,
-        duration: 2200 + Math.random() * 1800,
-        drift: (Math.random() - 0.5) * 70,
-        spin: (Math.random() > 0.5 ? 1 : -1) * (160 + Math.random() * 320),
+        left: seed.left * Math.max(width - 28, 1),
       })),
-    [width]
+    [seeds, width]
   );
 
   return (
@@ -149,7 +157,10 @@ export default function QuizScreen() {
   const wantResume = params.resume === '1';
   const openInReview = params.review === '1';
 
-  const subject = useMemo(() => getSubjectById(subjectId), [subjectId]);
+  const subject = useMemo(
+    () => getSubjectById(subjectId) ?? CURRICULUM_SUBJECTS[0],
+    [subjectId]
+  );
   const studyData = useMemo(
     () => getSubjectStudyData(subject.id, subject.name, subject.category),
     [subject]
@@ -207,7 +218,6 @@ export default function QuizScreen() {
   const [reviewing, setReviewing] = useState(false);
   const [bestScore, setBestScore] = useState(0);
   const [bestTotal, setBestTotal] = useState(0);
-  const [xp, setXp] = useState(0);
 
   const activeQuestion = questions[currentIndex] || questions[0];
   const total = questions.length;
@@ -233,13 +243,8 @@ export default function QuizScreen() {
   useEffect(() => {
     let mounted = true;
     (async () => {
-      const [map, savedXp] = await Promise.all([
-        loadSubjectQuizProgress(subjectId),
-        AsyncStorage.getItem('learner_xp'),
-      ]);
+      const map = await loadSubjectQuizProgress(subjectId);
       if (!mounted) return;
-
-      if (savedXp) setXp(parseInt(savedXp, 10) || 0);
 
       const entry = map[progressKey];
       if (entry) {
@@ -302,14 +307,13 @@ export default function QuizScreen() {
     return () => {
       mounted = false;
     };
+    // Only re-run when the quiz identity changes, not on every answer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subjectId, progressKey, wantResume, openInReview, questions.length]);
 
   const awardXp = async (amount: number) => {
-    const next = xp + amount;
-    setXp(next);
-    try {
-      await AsyncStorage.setItem('learner_xp', next.toString());
-    } catch {}
+    await addXp(amount);
+    recordDailyActivity();
   };
 
   const handleSelectOption = async (optionIndex: number) => {

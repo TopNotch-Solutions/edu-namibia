@@ -1111,13 +1111,115 @@ export function getExploreSiteContext(siteId: string): {
   return null;
 }
 
-export function getSitesForCategory(categoryId: string): Array<{
-  subtopicTitle: string;
-  site: RegionExploreSite;
-}> {
+/**
+ * Which region(s) each site belongs to (ids from `NAMIBIA_REGIONS`).
+ * Large parks and deserts span several regions.
+ */
+export const SITE_REGION_IDS: Record<string, string[]> = {
+  // Physical Geography
+  'geo-topo-1': ['hardap'],
+  'geo-topo-2': ['karas'],
+  'geo-topo-3': ['erongo'],
+  'geo-hydro-1': ['kunene'],
+  'geo-hydro-2': ['karas'],
+  'geo-hydro-3': ['hardap'],
+  'geo-protected-1': ['oshikoto', 'kunene', 'oshana', 'omusati'],
+  'geo-protected-2': ['hardap', 'erongo', 'karas'],
+  'geo-protected-3': ['zambezi', 'kavango-east'],
+  'geo-climate-1': ['kunene', 'erongo'],
+  'geo-climate-2': ['zambezi'],
+  'geo-climate-3': ['omaheke'],
+  // Culture
+  'cul-history-1': ['khomas'],
+  'cul-history-2': ['khomas'],
+  'cul-history-3': ['karas'],
+  'cul-demo-1': ['khomas'],
+  'cul-demo-2': ['oshana'],
+  'cul-demo-3': ['karas'],
+  'cul-arts-1': ['khomas'],
+  'cul-arts-2': ['khomas'],
+  'cul-arts-3': ['erongo'],
+  'cul-fest-1': ['khomas'],
+  'cul-fest-2': ['oshana'],
+  'cul-fest-3': ['karas'],
+  // History sites
+  'hist-unesco-1': ['kunene'],
+  'hist-unesco-2': ['erongo', 'hardap', 'karas'],
+  'hist-unesco-3': ['erongo'],
+  'hist-monument-1': ['khomas'],
+  'hist-monument-2': ['khomas'],
+  'hist-monument-3': ['khomas'],
+  'hist-ruins-1': ['erongo'],
+  'hist-ruins-2': ['erongo'],
+  'hist-ruins-3': ['karas'],
+  'hist-museum-1': ['khomas'],
+  'hist-museum-2': ['erongo'],
+  'hist-museum-3': ['oshikoto'],
+  // Events
+  'evt-culture-1': ['kunene'],
+  'evt-culture-2': ['omusati'],
+  'evt-culture-3': ['otjozondjupa'],
+  'evt-holidays-1': ['khomas'],
+  'evt-holidays-2': ['khomas'],
+  'evt-holidays-3': ['khomas'],
+  'evt-religious-1': ['khomas'],
+  'evt-religious-2': ['khomas'],
+  'evt-religious-3': ['khomas'],
+  'evt-seasonal-1': ['khomas'],
+  'evt-seasonal-2': ['erongo'],
+  'evt-seasonal-3': ['omaheke'],
+  // Gastronomy
+  'gas-dishes-1': ['khomas'],
+  'gas-dishes-2': ['khomas'],
+  'gas-dishes-3': ['erongo'],
+  'gas-markets-1': ['khomas'],
+  'gas-markets-2': ['oshana'],
+  'gas-markets-3': ['khomas'],
+  'gas-drinks-1': ['khomas'],
+  'gas-drinks-2': ['erongo'],
+  'gas-drinks-3': ['erongo'],
+  'gas-etiquette-1': ['khomas'],
+  'gas-etiquette-2': ['khomas'],
+  'gas-etiquette-3': ['erongo'],
+  // Travel
+  'trv-transport-1': ['khomas'],
+  'trv-transport-2': ['khomas'],
+  'trv-transport-3': ['khomas'],
+  'trv-entry-1': ['khomas'],
+  'trv-entry-2': ['khomas'],
+  'trv-entry-3': ['karas'],
+  'trv-currency-1': ['khomas'],
+  'trv-currency-2': ['khomas'],
+  'trv-currency-3': ['erongo'],
+  'trv-connectivity-1': ['khomas'],
+  'trv-connectivity-2': ['khomas'],
+  'trv-connectivity-3': ['khomas'],
+  // Safety
+  'saf-health-1': ['khomas'],
+  'saf-health-2': ['khomas'],
+  'saf-health-3': ['oshana'],
+  'saf-security-1': ['khomas'],
+  'saf-security-2': ['khomas'],
+  'saf-security-3': ['erongo'],
+  'saf-norms-1': ['khomas'],
+  'saf-norms-2': ['kunene'],
+  'saf-norms-3': ['khomas'],
+};
+
+export function isSiteInRegion(siteId: string, regionId: string): boolean {
+  return SITE_REGION_IDS[siteId]?.includes(regionId) ?? false;
+}
+
+/** Sites for a category, limited to one region when `regionId` is given. */
+export function getSitesForCategory(
+  categoryId: string,
+  regionId?: string
+): { subtopicTitle: string; site: RegionExploreSite }[] {
   const category = REGION_EXPLORE_CATEGORIES.find((c) => c.id === categoryId);
   if (!category) return [];
   return category.subtopics.flatMap((sub) =>
-    sub.sites.map((site) => ({ subtopicTitle: sub.title, site }))
+    sub.sites
+      .filter((site) => !regionId || isSiteInRegion(site.id, regionId))
+      .map((site) => ({ subtopicTitle: sub.title, site }))
   );
 }

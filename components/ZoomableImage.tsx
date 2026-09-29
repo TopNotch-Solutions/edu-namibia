@@ -42,58 +42,59 @@ export function ZoomableImageModal({
   const savedX = useSharedValue(0);
   const savedY = useSharedValue(0);
 
+  // Shared values use .get()/.set() so the React Compiler doesn't treat them as mutated props.
   useEffect(() => {
     if (!visible) {
-      scale.value = 1;
-      savedScale.value = 1;
-      translateX.value = 0;
-      translateY.value = 0;
-      savedX.value = 0;
-      savedY.value = 0;
+      scale.set(1);
+      savedScale.set(1);
+      translateX.set(0);
+      translateY.set(0);
+      savedX.set(0);
+      savedY.set(0);
     }
   }, [visible, scale, savedScale, translateX, translateY, savedX, savedY]);
 
   const pinch = Gesture.Pinch()
     .onUpdate((e) => {
-      const next = savedScale.value * e.scale;
-      scale.value = Math.min(MAX_SCALE, Math.max(MIN_SCALE, next));
+      const next = savedScale.get() * e.scale;
+      scale.set(Math.min(MAX_SCALE, Math.max(MIN_SCALE, next)));
     })
     .onEnd(() => {
-      savedScale.value = scale.value;
-      if (scale.value <= 1.05) {
-        scale.value = withTiming(1);
-        savedScale.value = 1;
-        translateX.value = withTiming(0);
-        translateY.value = withTiming(0);
-        savedX.value = 0;
-        savedY.value = 0;
+      savedScale.set(scale.get());
+      if (scale.get() <= 1.05) {
+        scale.set(withTiming(1));
+        savedScale.set(1);
+        translateX.set(withTiming(0));
+        translateY.set(withTiming(0));
+        savedX.set(0);
+        savedY.set(0);
       }
     });
 
   const pan = Gesture.Pan()
     .onUpdate((e) => {
-      if (scale.value <= 1) return;
-      translateX.value = savedX.value + e.translationX;
-      translateY.value = savedY.value + e.translationY;
+      if (scale.get() <= 1) return;
+      translateX.set(savedX.get() + e.translationX);
+      translateY.set(savedY.get() + e.translationY);
     })
     .onEnd(() => {
-      savedX.value = translateX.value;
-      savedY.value = translateY.value;
+      savedX.set(translateX.get());
+      savedY.set(translateY.get());
     });
 
   const doubleTap = Gesture.Tap()
     .numberOfTaps(2)
     .onEnd(() => {
-      if (scale.value > 1.2) {
-        scale.value = withTiming(1);
-        savedScale.value = 1;
-        translateX.value = withTiming(0);
-        translateY.value = withTiming(0);
-        savedX.value = 0;
-        savedY.value = 0;
+      if (scale.get() > 1.2) {
+        scale.set(withTiming(1));
+        savedScale.set(1);
+        translateX.set(withTiming(0));
+        translateY.set(withTiming(0));
+        savedX.set(0);
+        savedY.set(0);
       } else {
-        scale.value = withTiming(2.2);
-        savedScale.value = 2.2;
+        scale.set(withTiming(2.2));
+        savedScale.set(2.2);
       }
     });
 

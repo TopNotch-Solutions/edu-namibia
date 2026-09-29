@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Animated,
   Dimensions,
@@ -68,8 +68,8 @@ export default function OnboardingScreen() {
   const insets = useSafeAreaInsets();
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
 
-  const fadeAnim = useRef(new Animated.Value(1)).current;
-  const slideAnim = useRef(new Animated.Value(0)).current;
+  const [fadeAnim] = useState(() => new Animated.Value(1));
+  const [slideAnim] = useState(() => new Animated.Value(0));
 
   const currentStep = STEPS_DATA[currentStepIndex];
 
@@ -94,7 +94,7 @@ export default function OnboardingScreen() {
         }
       })
       .catch(() => {});
-  }, []);
+  }, [router]);
 
   const animateTransition = (
     nextIndex: number,

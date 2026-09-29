@@ -1,3 +1,5 @@
+import type { GradeId } from './lessonTypes';
+
 export interface GradeOption {
   id: string;
   name: string;
@@ -267,4 +269,21 @@ export const CURRICULUM_SUBJECTS: SubjectOption[] = [
 
 export function getSubjectById(id: string): SubjectOption | undefined {
   return CURRICULUM_SUBJECTS.find((sub) => sub.id === id);
+}
+
+export function getGradeById(id: string): GradeOption | undefined {
+  return GRADE_OPTIONS.find((grade) => grade.id === id);
+}
+
+/** Display label for a grade id, falling back to the id itself. */
+export function getGradeLabel(id: string): string {
+  return getGradeById(id)?.name ?? id;
+}
+
+/** Resolves a stored value that may be a grade id or a legacy display name. */
+export function resolveGradeId(value: string | undefined | null): GradeId {
+  if (!value) return 'gr11';
+  if (getGradeById(value)) return value as GradeId;
+  const byName = GRADE_OPTIONS.find((grade) => grade.name === value);
+  return (byName?.id ?? 'gr11') as GradeId;
 }

@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   BackHandler,
   FlatList,
@@ -15,13 +15,12 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { CURRICULUM_SUBJECTS, GRADE_OPTIONS } from '@/constants/curriculum';
+import { CURRICULUM_SUBJECTS, GRADE_OPTIONS, resolveGradeId } from '@/constants/curriculum';
 import { setUserPath } from '@/constants/userPath';
 
 // Official Namibian colors
 const NAMIBIA_BLUE = '#002B7F';
 const NAMIBIA_RED = '#D21034';
-const NAMIBIA_GREEN = '#009A44';
 const NAMIBIA_YELLOW = '#FFCE00';
 
 export default function SelectGradeScreen() {
@@ -32,6 +31,41 @@ export default function SelectGradeScreen() {
   const [selectedGradeId, setSelectedGradeId] = useState<string>('gr11');
   const [selectedSubjectIds, setSelectedSubjectIds] = useState<string[]>([]);
   const [searchFilter, setSearchFilter] = useState('');
+  // True when the learner already has a saved setup — this screen is then an
+  // edit, and cancelling must return them to where they came from.
+  const [hasExistingSetup, setHasExistingSetup] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const [flag, storedGradeId, storedGradeName, storedSubjects] = await Promise.all([
+          AsyncStorage.getItem('has_selected_grade_and_subjects'),
+          AsyncStorage.getItem('user_grade_id'),
+          AsyncStorage.getItem('user_grade'),
+          AsyncStorage.getItem('user_subjects'),
+        ]);
+        if (!active) return;
+
+        setHasExistingSetup(flag === 'true' || Boolean(storedGradeId || storedGradeName));
+
+        if (storedGradeId || storedGradeName) {
+          setSelectedGradeId(resolveGradeId(storedGradeId || storedGradeName));
+        }
+        if (storedSubjects) {
+          const parsed = JSON.parse(storedSubjects);
+          if (Array.isArray(parsed)) {
+            setSelectedSubjectIds(parsed.filter((id) => typeof id === 'string'));
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to load existing curriculum setup', e);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const selectedGrade =
     GRADE_OPTIONS.find((g) => g.id === selectedGradeId) || GRADE_OPTIONS[1];
@@ -48,26 +82,38 @@ export default function SelectGradeScreen() {
     setSelectedSubjectIds([]);
   };
 
-  // Prevent going back to onboarding from select grade
+  /**
+   * Leaving step 1. A learner who already has a setup is editing it, so
+   * cancelling returns them to home. A first-time learner still has to choose
+   * a path, so they go back to choose-path.
+   *
+   * Without this, back bounced between select-grade and choose-path forever —
+   * choose-path sends "learner" straight back here — and home was unreachable.
+   */
+  const leaveSetup = useCallback(() => {
+    router.replace(hasExistingSetup ? '/home' : '/choose-path');
+  }, [hasExistingSetup, router]);
+
+  // Never fall back to onboarding from this screen.
   useEffect(() => {
     const onHardwareBack = () => {
       if (currentStep === 2) {
         setCurrentStep(1);
         return true; // handled, returns to Grade selection
       }
-      router.replace('/choose-path');
+      leaveSetup();
       return true;
     };
 
     const sub = BackHandler.addEventListener('hardwareBackPress', onHardwareBack);
     return () => sub.remove();
-  }, [currentStep]);
+  }, [currentStep, leaveSetup]);
 
   const handleBack = () => {
     if (currentStep === 2) {
       setCurrentStep(1);
     } else {
-      router.replace('/choose-path');
+      leaveSetup();
     }
   };
 
@@ -81,6 +127,7 @@ export default function SelectGradeScreen() {
     } else {
       if (selectedSubjectIds.length === 0) return;
       try {
+        await AsyncStorage.setItem('user_grade_id', selectedGrade.id);
         await AsyncStorage.setItem('user_grade', selectedGrade.name);
         await AsyncStorage.setItem('user_subjects', JSON.stringify(selectedSubjectIds));
         await AsyncStorage.setItem('has_completed_onboarding', 'true');
@@ -92,6 +139,7 @@ export default function SelectGradeScreen() {
       router.replace({
         pathname: '/home',
         params: {
+          gradeId: selectedGrade.id,
           grade: selectedGrade.name,
           subjectsCount: selectedSubjectIds.length.toString(),
         },
@@ -118,10 +166,24 @@ export default function SelectGradeScreen() {
           <Text style={styles.backButtonText}>←</Text>
         </Pressable>
         <Text style={styles.headerTitle}>
-          {currentStep === 1 ? 'Select Grade' : 'Select Subjects'}
+          {currentStep === 1
+            ? hasExistingSetup
+              ? 'Edit Setup'
+              : 'Select Grade'
+            : 'Select Subjects'}
         </Text>
 
-        <View style={styles.headerSideSlot} />
+        {currentStep === 1 && hasExistingSetup ? (
+          <Pressable
+            onPress={leaveSetup}
+            style={({ pressed }) => [styles.cancelButton, pressed && styles.pressedState]}
+            hitSlop={10}
+          >
+            <Text style={styles.cancelButtonText}>Cancel</Text>
+          </Pressable>
+        ) : (
+          <View style={styles.headerSideSlot} />
+        )}
       </View>
 
       {/* Screen Content */}
@@ -312,6 +374,12 @@ export default function SelectGradeScreen() {
             </Text>
           </LinearGradient>
         </Pressable>
+
+        {isSubmitDisabled && (
+          <Text style={styles.bottomHint}>
+            Tap the subjects you take. You can change them again later from Edit Setup.
+          </Text>
+        )}
       </View>
     </View>
   );
@@ -335,6 +403,24 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800',
     color: '#0F172A',
+  },
+  cancelButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#F1F5F9',
+  },
+  cancelButtonText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  bottomHint: {
+    marginTop: 10,
+    fontSize: 12.5,
+    lineHeight: 18,
+    color: '#94A3B8',
+    textAlign: 'center',
   },
   backButton: {
     width: 38,

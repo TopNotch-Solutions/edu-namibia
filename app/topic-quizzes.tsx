@@ -3,7 +3,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { getSubjectById } from '@/constants/curriculum';
+import { CURRICULUM_SUBJECTS, getSubjectById } from '@/constants/curriculum';
 import {
   getQuizSetsForTopic,
   loadSubjectQuizProgress,
@@ -29,7 +29,10 @@ export default function TopicQuizzesScreen() {
     | 'topicPractice'
     | 'pastPapers';
 
-  const subject = useMemo(() => getSubjectById(subjectId), [subjectId]);
+  const subject = useMemo(
+    () => getSubjectById(subjectId) ?? CURRICULUM_SUBJECTS[0],
+    [subjectId]
+  );
   const studyData = useMemo(
     () => getSubjectStudyData(subject.id, subject.name, subject.category),
     [subject]

@@ -36,6 +36,7 @@ export default function RegionScreen() {
     capital?: string;
   }>();
 
+  const regionId = params.id || '';
   const regionName = params.name || 'Namibia Region';
   const regionCapital = params.capital || '—';
 
@@ -51,8 +52,8 @@ export default function RegionScreen() {
   }, [selectedCategoryId]);
 
   const optionCount = useMemo(
-    () => getSitesForCategory(selectedCategory.id).length,
-    [selectedCategory.id]
+    () => getSitesForCategory(selectedCategory.id, regionId || undefined).length,
+    [selectedCategory.id, regionId]
   );
 
   const openTopicExplore = () => {
@@ -60,6 +61,7 @@ export default function RegionScreen() {
       pathname: '/region-topic',
       params: {
         categoryId: selectedCategory.id,
+        regionId,
         regionName,
       },
     });
@@ -162,7 +164,9 @@ export default function RegionScreen() {
         <View style={styles.explorePanel}>
           <Text style={styles.explorePanelTitle}>{selectedCategory.title}</Text>
           <Text style={styles.explorePanelText}>
-            {optionCount} places with photos, descriptions, and map coordinates.
+            {optionCount > 0
+              ? `${optionCount} place${optionCount === 1 ? '' : 's'} in ${regionName} with photos, descriptions, and map coordinates.`
+              : `No places listed in ${regionName} for this topic yet — see nationwide highlights instead.`}
           </Text>
           <Pressable
             onPress={openTopicExplore}

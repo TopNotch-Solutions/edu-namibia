@@ -2,9 +2,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, Easing, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Easing, Pressable, StyleSheet, Text } from 'react-native';
 
-const TOTAL_DURATION_MS = 10000;
+const TOTAL_DURATION_MS = 4000;
 
 const ANIMATED_WORDS = [
   { word: 'Access', subtitle: 'Curriculum materials digitally' },
@@ -18,13 +18,14 @@ export default function SplashScreen() {
   const [wordIndex, setWordIndex] = useState(0);
 
   // Logo animations
-  const logoFade = useRef(new Animated.Value(0)).current;
-  const logoScale = useRef(new Animated.Value(0.85)).current;
-  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const [logoFade] = useState(() => new Animated.Value(0));
+  const [logoScale] = useState(() => new Animated.Value(0.85));
+  const [pulseAnim] = useState(() => new Animated.Value(1));
+  const [combinedLogoScale] = useState(() => Animated.multiply(logoScale, pulseAnim));
 
   // Text transition animations
-  const textFade = useRef(new Animated.Value(0)).current;
-  const textTranslateY = useRef(new Animated.Value(12)).current;
+  const [textFade] = useState(() => new Animated.Value(0));
+  const [textTranslateY] = useState(() => new Animated.Value(12));
 
   const hasNavigated = useRef(false);
   const targetRouteRef = useRef<
@@ -113,7 +114,7 @@ export default function SplashScreen() {
         ])
       ).start();
     });
-  }, []);
+  }, [logoFade, logoScale, pulseAnim]);
 
   // 2. Animate text in on word change
   const animateTextIn = () => {
@@ -136,11 +137,11 @@ export default function SplashScreen() {
     ]).start();
   };
 
-  // 3. Word cycle and 10-second timer
+  // 3. Word cycle and auto-advance timer
   useEffect(() => {
     animateTextIn();
 
-    const intervalTime = TOTAL_DURATION_MS / ANIMATED_WORDS.length; // ~2.5s per word
+    const intervalTime = TOTAL_DURATION_MS / ANIMATED_WORDS.length; // 1s per word
     let currentIndex = 0;
 
     const interval = setInterval(() => {
@@ -159,7 +160,7 @@ export default function SplashScreen() {
       });
     }, intervalTime);
 
-    // Auto-navigate after 10 seconds
+    // Auto-navigate once all words have shown
     const timeout = setTimeout(() => {
       navigateToNextScreen();
     }, TOTAL_DURATION_MS);
@@ -168,9 +169,10 @@ export default function SplashScreen() {
       clearInterval(interval);
       clearTimeout(timeout);
     };
+    // Runs once on mount; the helpers only touch stable animated values and refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const combinedLogoScale = Animated.multiply(logoScale, pulseAnim);
   const currentItem = ANIMATED_WORDS[wordIndex] || ANIMATED_WORDS[0];
 
   return (

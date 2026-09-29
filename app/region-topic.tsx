@@ -26,6 +26,7 @@ export default function RegionTopicScreen() {
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{
     categoryId?: string;
+    regionId?: string;
     regionName?: string;
   }>();
 
@@ -36,9 +37,16 @@ export default function RegionTopicScreen() {
     [params.categoryId]
   );
 
+  const regionSites = useMemo(
+    () => (params.regionId ? getSitesForCategory(category.id, params.regionId) : null),
+    [category.id, params.regionId]
+  );
+
+  // With no region (or no places in it for this topic) fall back to nationwide highlights.
+  const showingNationwide = !regionSites || regionSites.length === 0;
   const sites = useMemo(
-    () => getSitesForCategory(category.id),
-    [category.id]
+    () => (showingNationwide ? getSitesForCategory(category.id) : regionSites),
+    [showingNationwide, regionSites, category.id]
   );
 
   const regionName = params.regionName || 'Namibia';
@@ -81,12 +89,27 @@ export default function RegionTopicScreen() {
           <View style={styles.heroContent}>
             <Text style={styles.heroKicker}>{regionName}</Text>
             <Text style={styles.heroTitle}>{category.title}</Text>
-            <Text style={styles.heroCount}>{sites.length} places to explore</Text>
+            <Text style={styles.heroCount}>
+              {showingNationwide && regionSites
+                ? 'No places listed here yet'
+                : `${sites.length} place${sites.length === 1 ? '' : 's'} to explore`}
+            </Text>
           </View>
         </ZoomableImage>
 
+        {showingNationwide && regionSites && (
+          <View style={styles.emptyNotice}>
+            <Text style={styles.emptyNoticeTitle}>Nothing in {regionName} for this topic yet</Text>
+            <Text style={styles.emptyNoticeText}>
+              Here are highlights from across Namibia instead.
+            </Text>
+          </View>
+        )}
+
         <View style={styles.listHeader}>
-          <Text style={styles.listTitle}>All options</Text>
+          <Text style={styles.listTitle}>
+            {showingNationwide ? 'Across Namibia' : `In ${regionName}`}
+          </Text>
           <Text style={styles.listSubtitle}>
             Tap a photo to zoom · Explore for map details
           </Text>
@@ -221,6 +244,25 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: '#CBD5E1',
+  },
+  emptyNotice: {
+    marginHorizontal: 16,
+    marginBottom: 16,
+    padding: 14,
+    borderRadius: 16,
+    backgroundColor: '#FEF9C3',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  emptyNoticeTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0F172A',
+    marginBottom: 2,
+  },
+  emptyNoticeText: {
+    fontSize: 13,
+    color: '#475569',
   },
   listHeader: {
     marginHorizontal: 16,

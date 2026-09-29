@@ -18,13 +18,17 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ExploreMapPane } from "@/components/ExploreMapPane";
-import { CURRICULUM_SUBJECTS, SubjectOption } from "@/constants/curriculum";
+import {
+  CURRICULUM_SUBJECTS,
+  getGradeLabel,
+  resolveGradeId,
+  SubjectOption,
+} from "@/constants/curriculum";
 import { getUserPath } from "@/constants/userPath";
 
 // Official Namibian colors
 const NAMIBIA_BLUE = "#002B7F";
 const NAMIBIA_RED = "#D21034";
-const NAMIBIA_GREEN = "#009A44";
 const NAMIBIA_YELLOW = "#FFCE00";
 const MAP_PIN_PINK = "#E84A7F";
 
@@ -39,6 +43,7 @@ type MainTab = "home" | "explore";
 export default function HomeScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{
+    gradeId?: string;
     grade?: string;
     subjectsCount?: string;
   }>();
@@ -47,6 +52,7 @@ export default function HomeScreen() {
   // State
   const [activeTab, setActiveTab] = useState<MainTab>("home");
   const [isReturningUser, setIsReturningUser] = useState<boolean | null>(null);
+  const [activeGradeId, setActiveGradeId] = useState<string>("gr11");
   const [activeGrade, setActiveGrade] = useState<string>("Grade 11 (NSSCO)");
   const [selectedSubjectIds, setSelectedSubjectIds] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
@@ -65,13 +71,15 @@ export default function HomeScreen() {
         await AsyncStorage.setItem("has_visited_landing", "true");
       }
 
-      // 2. Load Grade
+      // 2. Load Grade. The id is what content is keyed by; the name is only
+      // ever a label, derived from the id.
+      const storedGradeId = await AsyncStorage.getItem("user_grade_id");
       const storedGrade = await AsyncStorage.getItem("user_grade");
-      if (params.grade) {
-        setActiveGrade(params.grade);
-      } else if (storedGrade) {
-        setActiveGrade(storedGrade);
-      }
+      const gradeId = resolveGradeId(
+        params.gradeId || storedGradeId || params.grade || storedGrade
+      );
+      setActiveGradeId(gradeId);
+      setActiveGrade(getGradeLabel(gradeId));
 
       // 3. Load Selected Subjects
       const storedSubjects = await AsyncStorage.getItem("user_subjects");
@@ -97,8 +105,14 @@ export default function HomeScreen() {
   };
 
   useEffect(() => {
-    loadUserData();
-  }, [params.grade]);
+    // Deferred so state updates happen after the effect, not synchronously inside it.
+    const task = setTimeout(() => {
+      loadUserData();
+    }, 0);
+    return () => clearTimeout(task);
+    // loadUserData only depends on the grade params
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.grade, params.gradeId]);
 
   useEffect(() => {
     getUserPath().then((path) => {
@@ -378,6 +392,7 @@ export default function HomeScreen() {
                     pathname: "/subject",
                     params: {
                       id: item.id,
+                      gradeId: activeGradeId,
                       grade: activeGrade,
                     },
                   });
