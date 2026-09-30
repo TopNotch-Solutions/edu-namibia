@@ -32,14 +32,16 @@ export const NAMIBIA_REGIONS: NamibiaRegion[] = [
 ];
 
 export const NAMIBIA_MAP_REGION: MapCamera = {
-  latitude: -22.0,
-  longitude: 17.2,
-  latitudeDelta: 12.5,
-  longitudeDelta: 11.5,
+  latitude: -22.3,
+  longitude: 17.5,
+  // Tight enough that Namibia fills a phone viewport (~Leaflet zoom 6).
+  latitudeDelta: 6.2,
+  longitudeDelta: 5.8,
 };
 
 export function cameraToZoom(latitudeDelta: number): number {
   // Approximate conversion from latitudeDelta to Leaflet zoom.
-  const zoom = Math.round(Math.log2(360 / Math.max(latitudeDelta, 0.01)));
-  return Math.max(4, Math.min(16, zoom));
+  // Slight positive bias so the frame sits closer on tall phone screens.
+  const zoom = Math.log2(360 / Math.max(latitudeDelta, 0.01)) + 0.4;
+  return Math.max(5, Math.min(16, Math.round(zoom)));
 }

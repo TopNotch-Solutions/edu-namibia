@@ -71,8 +71,9 @@ export function ExploreMapPane({ bottomOffset = 16 }: ExploreMapPaneProps) {
     setCamera({
       latitude: region.latitude,
       longitude: region.longitude,
-      latitudeDelta: 3.2,
-      longitudeDelta: 3.2,
+      // Zoom ~8 — close enough to read the region, still shows nearby context.
+      latitudeDelta: 1.35,
+      longitudeDelta: 1.35,
     });
     setCameraKey((k) => k + 1);
   };

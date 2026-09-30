@@ -1,7 +1,9 @@
+import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   Platform,
   Pressable,
   ScrollView,
@@ -11,15 +13,59 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { TopicImageSlider } from '@/components/TopicImageSlider';
 import { ZoomableImage } from '@/components/ZoomableImage';
 import {
-  REGION_EXPLORE_CATEGORIES,
-  getSitesForCategory,
-} from '@/constants/regionExplore';
+  getNationwideSitesForCategory,
+  getSitesForCategoryMerged,
+  syncExploreEntries,
+  type RichExploreSite,
+} from '@/constants/exploreSync';
+import { REGION_EXPLORE_CATEGORIES } from '@/constants/regionExplore';
 
 const NAMIBIA_BLUE = '#002B7F';
 const NAMIBIA_YELLOW = '#FFCE00';
 const MAP_PIN_PINK = '#E84A7F';
+
+type ListedSite = {
+  subtopicTitle: string;
+  site: RichExploreSite;
+  fromRemote: boolean;
+};
+
+function EmptyExploreState({
+  title,
+  message,
+  icon = 'map-outline',
+}: {
+  title: string;
+  message: string;
+  icon?: keyof typeof Ionicons.glyphMap;
+}) {
+  return (
+    <View style={styles.emptyState}>
+      <View style={styles.emptyIconRing}>
+        <Ionicons name={icon} size={28} color={NAMIBIA_BLUE} />
+      </View>
+      <Text style={styles.emptyTitle}>{title}</Text>
+      <Text style={styles.emptyMessage}>{message}</Text>
+      <View style={styles.emptyHints}>
+        <View style={styles.emptyHint}>
+          <Ionicons name="location-outline" size={16} color={MAP_PIN_PINK} />
+          <Text style={styles.emptyHintText}>Check another region</Text>
+        </View>
+        <View style={styles.emptyHint}>
+          <Ionicons name="grid-outline" size={16} color={MAP_PIN_PINK} />
+          <Text style={styles.emptyHintText}>Try a different topic</Text>
+        </View>
+        <View style={styles.emptyHint}>
+          <Ionicons name="refresh-outline" size={16} color={MAP_PIN_PINK} />
+          <Text style={styles.emptyHintText}>Come back soon for updates</Text>
+        </View>
+      </View>
+    </View>
+  );
+}
 
 export default function RegionTopicScreen() {
   const router = useRouter();
@@ -37,19 +83,43 @@ export default function RegionTopicScreen() {
     [params.categoryId]
   );
 
-  const regionSites = useMemo(
-    () => (params.regionId ? getSitesForCategory(category.id, params.regionId) : null),
-    [category.id, params.regionId]
-  );
-
-  // With no region (or no places in it for this topic) fall back to nationwide highlights.
-  const showingNationwide = !regionSites || regionSites.length === 0;
-  const sites = useMemo(
-    () => (showingNationwide ? getSitesForCategory(category.id) : regionSites),
-    [showingNationwide, regionSites, category.id]
-  );
-
   const regionName = params.regionName || 'Namibia';
+  const [loading, setLoading] = useState(true);
+  const [showingNationwide, setShowingNationwide] = useState(false);
+  const [sites, setSites] = useState<ListedSite[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      await syncExploreEntries(true);
+      if (cancelled) return;
+
+      let regional = params.regionId
+        ? await getSitesForCategoryMerged(category.id, params.regionId)
+        : [];
+
+      let nationwide = false;
+      if (!params.regionId || regional.length === 0) {
+        const all = await getNationwideSitesForCategory(category.id);
+        if (params.regionId && regional.length === 0 && all.length > 0) {
+          nationwide = true;
+          regional = all;
+        } else if (!params.regionId) {
+          regional = all;
+        }
+      }
+
+      if (!cancelled) {
+        setShowingNationwide(nationwide);
+        setSites(regional);
+        setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [category.id, params.regionId]);
 
   return (
     <View style={styles.container}>
@@ -80,81 +150,104 @@ export default function RegionTopicScreen() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: insets.bottom + 32 }}
       >
-        <ZoomableImage uri={category.image} title={category.title} style={styles.hero}>
-          <LinearGradient
-            colors={['transparent', 'rgba(2,6,23,0.7)', 'rgba(2,6,23,0.92)']}
-            style={StyleSheet.absoluteFill}
-          />
-          <View style={styles.heroSunBar} />
+        <TopicImageSlider
+          images={category.sliderImages}
+          title={category.title}
+          style={styles.hero}
+        >
           <View style={styles.heroContent}>
             <Text style={styles.heroKicker}>{regionName}</Text>
             <Text style={styles.heroTitle}>{category.title}</Text>
             <Text style={styles.heroCount}>
-              {showingNationwide && regionSites
-                ? 'No places listed here yet'
-                : `${sites.length} place${sites.length === 1 ? '' : 's'} to explore`}
+              {loading
+                ? 'Finding places…'
+                : showingNationwide
+                  ? 'More to discover nearby'
+                  : sites.length === 0
+                    ? 'Stay tuned for new places'
+                    : `${sites.length} place${sites.length === 1 ? '' : 's'} to explore`}
             </Text>
           </View>
-        </ZoomableImage>
+        </TopicImageSlider>
 
-        {showingNationwide && regionSites && (
-          <View style={styles.emptyNotice}>
-            <Text style={styles.emptyNoticeTitle}>Nothing in {regionName} for this topic yet</Text>
-            <Text style={styles.emptyNoticeText}>
-              Here are highlights from across Namibia instead.
-            </Text>
-          </View>
-        )}
-
-        <View style={styles.listHeader}>
-          <Text style={styles.listTitle}>
-            {showingNationwide ? 'Across Namibia' : `In ${regionName}`}
-          </Text>
-          <Text style={styles.listSubtitle}>
-            Tap a photo to zoom · Explore for map details
-          </Text>
-        </View>
-
-        {sites.map(({ subtopicTitle, site }) => (
-          <View key={site.id} style={styles.siteCard}>
-            <ZoomableImage
-              uri={site.image}
-              title={site.name}
-              style={styles.siteImage}
-            />
-            <View style={styles.siteContent}>
-              <Text style={styles.siteTopic}>{subtopicTitle}</Text>
-              <Text style={styles.siteName} numberOfLines={2}>
-                {site.name}
+        {showingNationwide && sites.length > 0 ? (
+          <View style={styles.nationwideBanner}>
+            <View style={styles.nationwideIcon}>
+              <Ionicons name="compass-outline" size={20} color={NAMIBIA_BLUE} />
+            </View>
+            <View style={styles.nationwideCopy}>
+              <Text style={styles.nationwideTitle}>
+                Expanding coverage in {regionName}
               </Text>
-              <Text style={styles.siteDesc} numberOfLines={3}>
-                {site.description}
+              <Text style={styles.nationwideText}>
+                Local highlights for this topic are on the way. Meanwhile, explore featured places
+                from across Namibia.
               </Text>
-              <View style={styles.siteFooter}>
-                <Text style={styles.siteCoords}>
-                  {site.latitude.toFixed(2)}°, {site.longitude.toFixed(2)}°
-                </Text>
-                <Pressable
-                  onPress={() =>
-                    router.push({
-                      pathname: '/region-site',
-                      params: {
-                        siteId: site.id,
-                        regionName,
-                      },
-                    })
-                  }
-                  style={({ pressed }) => [
-                    styles.exploreChip,
-                    pressed && styles.pressed,
-                  ]}
-                >
-                  <Text style={styles.exploreChipText}>Explore</Text>
-                </Pressable>
-              </View>
             </View>
           </View>
-        ))}
+        ) : null}
+
+        {loading ? (
+          <ActivityIndicator style={{ marginTop: 28 }} color={NAMIBIA_BLUE} />
+        ) : sites.length === 0 ? (
+          <EmptyExploreState
+            title="New discoveries coming soon"
+            message={`We're preparing curated places for ${category.title.toLowerCase()} in ${regionName}. Check back shortly for fresh guides, maps, and stories.`}
+            icon="telescope-outline"
+          />
+        ) : (
+          <>
+            <View style={styles.listHeader}>
+              <Text style={styles.listTitle}>
+                {showingNationwide ? 'Across Namibia' : `In ${regionName}`}
+              </Text>
+              <Text style={styles.listSubtitle}>
+                Tap a photo to zoom · Explore for map details
+              </Text>
+            </View>
+
+            {sites.map(({ subtopicTitle, site }) => (
+              <View key={site.id} style={styles.siteCard}>
+                <ZoomableImage
+                  uri={site.image}
+                  title={site.name}
+                  style={styles.siteImage}
+                />
+                <View style={styles.siteContent}>
+                  <Text style={styles.siteTopic}>{subtopicTitle}</Text>
+                  <Text style={styles.siteName} numberOfLines={2}>
+                    {site.name}
+                  </Text>
+                  <Text style={styles.siteDesc} numberOfLines={3}>
+                    {site.description}
+                  </Text>
+                  <View style={styles.siteFooter}>
+                    <Text style={styles.siteCoords}>
+                      {site.latitude.toFixed(2)}°, {site.longitude.toFixed(2)}°
+                    </Text>
+                    <Pressable
+                      onPress={() =>
+                        router.push({
+                          pathname: '/region-site',
+                          params: {
+                            siteId: site.id,
+                            regionName,
+                          },
+                        })
+                      }
+                      style={({ pressed }) => [
+                        styles.exploreChip,
+                        pressed && styles.pressed,
+                      ]}
+                    >
+                      <Text style={styles.exploreChipText}>Explore</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              </View>
+            ))}
+          </>
+        )}
       </ScrollView>
     </View>
   );
@@ -208,21 +301,14 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     borderRadius: 24,
     overflow: 'hidden',
-    backgroundColor: '#0F172A',
     marginBottom: 18,
     justifyContent: 'flex-end',
   },
-  heroSunBar: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 4,
-    backgroundColor: NAMIBIA_YELLOW,
-    zIndex: 2,
-  },
   heroContent: {
+    flex: 1,
+    justifyContent: 'flex-end',
     padding: 16,
+    paddingRight: 72,
     zIndex: 2,
   },
   heroKicker: {
@@ -245,24 +331,95 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#CBD5E1',
   },
-  emptyNotice: {
+  nationwideBanner: {
     marginHorizontal: 16,
     marginBottom: 16,
     padding: 14,
-    borderRadius: 16,
-    backgroundColor: '#FEF9C3',
+    borderRadius: 18,
+    backgroundColor: '#EEF4FB',
     borderWidth: 1,
-    borderColor: '#FDE68A',
+    borderColor: '#D5E3F4',
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'flex-start',
   },
-  emptyNoticeTitle: {
+  nationwideIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  nationwideCopy: {
+    flex: 1,
+  },
+  nationwideTitle: {
     fontSize: 14,
     fontWeight: '800',
     color: '#0F172A',
-    marginBottom: 2,
+    marginBottom: 3,
   },
-  emptyNoticeText: {
+  nationwideText: {
     fontSize: 13,
     color: '#475569',
+    lineHeight: 18,
+  },
+  emptyState: {
+    marginHorizontal: 16,
+    marginTop: 8,
+    paddingVertical: 28,
+    paddingHorizontal: 20,
+    borderRadius: 24,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E8EEF5',
+    alignItems: 'center',
+  },
+  emptyIconRing: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#EEF4FB',
+    borderWidth: 1,
+    borderColor: '#D5E3F4',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: '#0F172A',
+    textAlign: 'center',
+    letterSpacing: -0.2,
+    marginBottom: 8,
+  },
+  emptyMessage: {
+    fontSize: 14,
+    lineHeight: 21,
+    color: '#64748B',
+    textAlign: 'center',
+    maxWidth: 300,
+    marginBottom: 18,
+  },
+  emptyHints: {
+    width: '100%',
+    gap: 10,
+  },
+  emptyHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    backgroundColor: '#F8FAFC',
+  },
+  emptyHintText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#334155',
   },
   listHeader: {
     marginHorizontal: 16,

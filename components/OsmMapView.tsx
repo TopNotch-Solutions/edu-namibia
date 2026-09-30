@@ -50,20 +50,67 @@ function buildMapHtml(camera: MapCamera, markers: OsmMapMarker[]) {
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" />
   <style>
-    html, body, #map { margin: 0; padding: 0; width: 100%; height: 100%; background: #d4c4a8; }
-    .leaflet-container { background: #d4c4a8; }
-    .pin {
-      background: #E84A7F;
-      border: 2.5px solid #fff;
-      border-radius: 50%;
-      width: 18px;
-      height: 18px;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+    html, body, #map { margin: 0; padding: 0; width: 100%; height: 100%; background: #cfe6f7; }
+    .leaflet-container { background: #cfe6f7; font-family: system-ui, -apple-system, sans-serif; }
+    /* Brighten free OSM tiles without a paid basemap API key. */
+    .leaflet-tile-pane {
+      filter: saturate(1.45) contrast(1.08) brightness(1.06);
     }
-    .pin.selected {
-      background: #D21034;
+    .leaflet-control-attribution {
+      background: rgba(255,255,255,0.82) !important;
+      color: #475569;
+      font-size: 9px;
+    }
+    .leaflet-popup-content-wrapper {
+      border-radius: 14px;
+      box-shadow: 0 10px 28px rgba(15, 42, 78, 0.22);
+      border: 1px solid rgba(232, 238, 245, 0.95);
+    }
+    .leaflet-popup-content {
+      margin: 10px 12px;
+      font-size: 13px;
+      line-height: 1.35;
+      color: #0F172A;
+    }
+    .leaflet-popup-tip { box-shadow: none; }
+    .pin-wrap {
+      position: relative;
+      width: 28px;
+      height: 36px;
+    }
+    .pin {
       width: 22px;
       height: 22px;
+      border-radius: 50% 50% 50% 0;
+      transform: rotate(-45deg);
+      background: linear-gradient(145deg, #FF6B9D 0%, #E84A7F 55%, #C2185B 100%);
+      border: 2.5px solid #fff;
+      box-shadow: 0 4px 10px rgba(15, 23, 42, 0.35);
+      margin: 2px 0 0 3px;
+    }
+    .pin.selected {
+      width: 26px;
+      height: 26px;
+      background: linear-gradient(145deg, #FFCE00 0%, #F5B700 60%, #E08A2C 100%);
+      border-color: #fff;
+      box-shadow: 0 5px 14px rgba(224, 138, 44, 0.45);
+    }
+    .pin-dot {
+      position: absolute;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #fff;
+      top: 9px;
+      left: 10.5px;
+      box-shadow: 0 0 0 1px rgba(15,23,42,0.12);
+    }
+    .pin-wrap.selected .pin-dot {
+      top: 11px;
+      left: 12.5px;
+      width: 8px;
+      height: 8px;
+      background: #0F172A;
     }
   </style>
 </head>
@@ -83,14 +130,18 @@ function buildMapHtml(camera: MapCamera, markers: OsmMapMarker[]) {
       post('loadError', { reason: 'leaflet' });
     } else {
       var markersData = ${markersJson};
-      var map = L.map('map', { zoomControl: true }).setView([${camera.latitude}, ${camera.longitude}], ${zoom});
+      var map = L.map('map', {
+        zoomControl: true,
+        attributionControl: true
+      }).setView([${camera.latitude}, ${camera.longitude}], ${zoom});
       window.map = map;
 
       var tilesLoaded = 0;
       var tileErrors = 0;
+      // Free OSM tiles (no API key). Visual punch comes from CSS filter above.
       var tiles = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 18,
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
       });
       tiles.on('tileload', function () {
         tilesLoaded += 1;
@@ -118,20 +169,29 @@ function buildMapHtml(camera: MapCamera, markers: OsmMapMarker[]) {
           delete layerById[k];
         });
         (list || []).forEach(function (m) {
+          var selected = !!m.selected;
+          var size = selected ? 32 : 28;
           var icon = L.divIcon({
             className: '',
-            html: '<div class="pin' + (m.selected ? ' selected' : '') + '"></div>',
-            iconSize: [m.selected ? 22 : 18, m.selected ? 22 : 18],
-            iconAnchor: [m.selected ? 11 : 9, m.selected ? 11 : 9],
+            html: '<div class="pin-wrap' + (selected ? ' selected' : '') + '"><div class="pin' + (selected ? ' selected' : '') + '"></div><div class="pin-dot"></div></div>',
+            iconSize: [size, selected ? 40 : 36],
+            iconAnchor: [size / 2, selected ? 38 : 34],
+            popupAnchor: [0, selected ? -34 : -30],
           });
-          var marker = L.marker([m.lat, m.lng], { icon: icon }).addTo(map);
-          marker.bindPopup('<strong>' + escapeHtml(m.title) + '</strong><br/>' + escapeHtml(m.subtitle));
+          var marker = L.marker([m.lat, m.lng], { icon: icon, riseOnHover: true }).addTo(map);
+          marker.bindPopup('<strong>' + escapeHtml(m.title) + '</strong><br/><span style="color:#64748B">' + escapeHtml(m.subtitle) + '</span>');
           marker.on('click', function () { post('markerPress', { id: m.id }); });
           layerById[m.id] = marker;
         });
       }
 
       upsertMarkers(markersData);
+
+      // Frame all pins on first paint so the country overview isn't too zoomed out.
+      if (markersData.length > 1) {
+        var bounds = L.latLngBounds(markersData.map(function (m) { return [m.lat, m.lng]; }));
+        map.fitBounds(bounds.pad(0.22), { maxZoom: 7, animate: false, padding: [48, 48] });
+      }
 
       window.handleNativeMessage = function (raw) {
         try {
@@ -283,7 +343,7 @@ export function OsmMapView({
 const styles = StyleSheet.create({
   wrap: {
     overflow: 'hidden',
-    backgroundColor: '#D4C4A8',
+    backgroundColor: '#CFE6F7',
   },
   webview: {
     flex: 1,
@@ -295,7 +355,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: '#F1EADF',
+    backgroundColor: '#EEF6FC',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 32,

@@ -52,7 +52,7 @@ constants/
   quizProgress.ts          Per-subject quiz progress persistence
   learnerStats.ts          XP and daily streak (writes are serialized)
   namibiaRegions.ts        Region capitals and map camera helpers
-  regionExplore.ts         Explore topics, places, and which region each place is in
+  regionExplore.ts         Explore category labels (places load from the portal API)
   userPath.ts              Learner / explorer preference
 scripts/                   Node scripts that generate the facts database
 ```

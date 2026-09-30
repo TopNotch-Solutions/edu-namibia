@@ -1,7 +1,8 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useMemo } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -12,7 +13,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { OsmMapView } from '@/components/OsmMapView';
 import { ZoomableImage } from '@/components/ZoomableImage';
-import { getExploreSiteContext } from '@/constants/regionExplore';
+import {
+  getExploreSiteByIdMerged,
+  syncExploreEntries,
+  type RichExploreSite,
+} from '@/constants/exploreSync';
+import type { RegionExploreCategory } from '@/constants/regionExplore';
 
 const NAMIBIA_BLUE = '#002B7F';
 const NAMIBIA_YELLOW = '#FFCE00';
@@ -26,12 +32,47 @@ export default function RegionSiteScreen() {
     regionName?: string;
   }>();
 
-  const context = useMemo(
-    () => (params.siteId ? getExploreSiteContext(params.siteId) : null),
-    [params.siteId]
-  );
+  const [loading, setLoading] = useState(true);
+  const [category, setCategory] = useState<RegionExploreCategory | null>(null);
+  const [subtopicTitle, setSubtopicTitle] = useState('');
+  const [site, setSite] = useState<RichExploreSite | null>(null);
 
-  if (!context) {
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      await syncExploreEntries(true);
+      if (!params.siteId || cancelled) {
+        if (!cancelled) setLoading(false);
+        return;
+      }
+      const context = await getExploreSiteByIdMerged(params.siteId);
+      if (cancelled) return;
+      if (context) {
+        setCategory(context.category);
+        setSubtopicTitle(context.subtopicTitle);
+        setSite(context.site);
+      } else {
+        setCategory(null);
+        setSite(null);
+      }
+      setLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [params.siteId]);
+
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.centered, { paddingTop: insets.top + 24 }]}>
+        <ActivityIndicator color={NAMIBIA_BLUE} />
+        <Text style={styles.loadingText}>Loading place…</Text>
+      </View>
+    );
+  }
+
+  if (!site || !category) {
     return (
       <View style={[styles.container, { paddingTop: insets.top + 24 }]}>
         <Text style={styles.missingTitle}>Site not found</Text>
@@ -42,8 +83,8 @@ export default function RegionSiteScreen() {
     );
   }
 
-  const { category, subtopic, site } = context;
   const regionName = params.regionName || 'Namibia';
+  const narrative = site.fullDescription || site.description;
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -61,7 +102,7 @@ export default function RegionSiteScreen() {
             {site.name}
           </Text>
           <Text style={styles.headerSubtitle}>
-            {subtopic.title} · {regionName}
+            {subtopicTitle} · {regionName}
           </Text>
         </View>
       </View>
@@ -79,14 +120,42 @@ export default function RegionSiteScreen() {
           <View style={styles.heroContent}>
             <Text style={styles.heroBadge}>Explore Site · Tap image to zoom</Text>
             <Text style={styles.heroTitle}>{site.name}</Text>
+            {site.ratingScore != null ? (
+              <Text style={styles.heroRating}>Rating {site.ratingScore.toFixed(1)} / 5</Text>
+            ) : null}
           </View>
         </ZoomableImage>
 
         <View style={styles.body}>
           <Text style={styles.sectionLabel}>About this place</Text>
-          <Text style={styles.description}>{site.description}</Text>
+          <Text style={styles.description}>{narrative}</Text>
+
+          {site.featuredImage?.credit ? (
+            <Text style={styles.credit}>Photo: {site.featuredImage.credit}</Text>
+          ) : null}
+
+          {site.gallery && site.gallery.length > 0 ? (
+            <>
+              <Text style={styles.sectionLabel}>Gallery</Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.galleryRow}
+              >
+                {site.gallery.map((item) => (
+                  <ZoomableImage
+                    key={item.url}
+                    uri={item.url}
+                    title={item.caption || site.name}
+                    style={styles.galleryImage}
+                  />
+                ))}
+              </ScrollView>
+            </>
+          ) : null}
 
           <Text style={styles.sectionLabel}>Location on map</Text>
+          {site.address ? <Text style={styles.addressText}>{site.address}</Text> : null}
           <Text style={styles.coordsText}>
             {site.latitude.toFixed(4)}°, {site.longitude.toFixed(4)}°
           </Text>
@@ -97,8 +166,8 @@ export default function RegionSiteScreen() {
               camera={{
                 latitude: site.latitude,
                 longitude: site.longitude,
-                latitudeDelta: 0.35,
-                longitudeDelta: 0.35,
+                latitudeDelta: 0.18,
+                longitudeDelta: 0.18,
               }}
               markers={[
                 {
@@ -106,7 +175,7 @@ export default function RegionSiteScreen() {
                   latitude: site.latitude,
                   longitude: site.longitude,
                   title: site.name,
-                  subtitle: subtopic.title,
+                  subtitle: subtopicTitle,
                   selected: true,
                 },
               ]}
@@ -122,6 +191,15 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F8FAFC',
+  },
+  centered: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadingText: {
+    marginTop: 10,
+    color: '#64748B',
+    fontWeight: '600',
   },
   header: {
     flexDirection: 'row',
@@ -197,6 +275,12 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     color: '#FFFFFF',
   },
+  heroRating: {
+    marginTop: 6,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#E2E8F0',
+  },
   body: {
     paddingHorizontal: 16,
     paddingTop: 18,
@@ -208,12 +292,79 @@ const styles = StyleSheet.create({
     letterSpacing: 0.7,
     textTransform: 'uppercase',
     marginBottom: 8,
+    marginTop: 4,
   },
   description: {
     fontSize: 15,
     lineHeight: 23,
     color: '#334155',
-    marginBottom: 22,
+    marginBottom: 10,
+  },
+  credit: {
+    fontSize: 12,
+    color: '#94A3B8',
+    marginBottom: 16,
+    fontStyle: 'italic',
+  },
+  tagRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 16,
+  },
+  tag: {
+    backgroundColor: '#EEF2FF',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  tagText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: NAMIBIA_BLUE,
+  },
+  detailCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    padding: 14,
+    marginBottom: 18,
+    gap: 12,
+  },
+  detailRow: {
+    gap: 4,
+  },
+  detailLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#64748B',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  detailValue: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#0F172A',
+    fontWeight: '600',
+  },
+  galleryRow: {
+    gap: 10,
+    paddingBottom: 8,
+    marginBottom: 12,
+  },
+  galleryImage: {
+    width: 160,
+    height: 110,
+    borderRadius: 14,
+    overflow: 'hidden',
+    backgroundColor: '#E2E8F0',
+  },
+  addressText: {
+    fontSize: 14,
+    color: '#475569',
+    marginBottom: 4,
+    fontWeight: '600',
   },
   coordsText: {
     fontSize: 13,

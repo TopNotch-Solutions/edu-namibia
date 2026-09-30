@@ -18,6 +18,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ExploreMapPane } from "@/components/ExploreMapPane";
+import { syncExploreEntries } from "@/constants/exploreSync";
 import {
   CURRICULUM_SUBJECTS,
   getGradeLabel,
@@ -121,6 +122,12 @@ export default function HomeScreen() {
       }
     });
   }, [router]);
+
+  useEffect(() => {
+    if (activeTab === "explore") {
+      void syncExploreEntries(true);
+    }
+  }, [activeTab]);
 
   const onRefresh = async () => {
     setRefreshing(true);

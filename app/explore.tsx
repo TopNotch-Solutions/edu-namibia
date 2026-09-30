@@ -1,11 +1,14 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useEffect } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect } from 'react';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ExploreMapPane } from '@/components/ExploreMapPane';
+import { syncExploreEntries } from '@/constants/exploreSync';
 import { getUserPath, setUserPath } from '@/constants/userPath';
+import { useExploreNetwork } from '@/hooks/useExploreNetwork';
 
 const NAMIBIA_BLUE = '#002B7F';
 const MAP_PIN_PINK = '#E84A7F';
@@ -13,6 +16,12 @@ const MAP_PIN_PINK = '#E84A7F';
 export default function ExploreScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+
+  const fetchExploreData = useCallback(() => {
+    void syncExploreEntries(true);
+  }, []);
+
+  const { isOnline } = useExploreNetwork(fetchExploreData);
 
   useEffect(() => {
     // Guard: explorers only. Learners should use /home.
@@ -37,7 +46,24 @@ export default function ExploreScreen() {
 
   return (
     <View style={styles.container}>
-      <ExploreMapPane bottomOffset={Math.max(insets.bottom, 12) + 56} />
+      {isOnline === false ? (
+        <View style={styles.offlinePane}>
+          <View style={styles.offlineIconWrap}>
+            <Ionicons name="cloud-offline-outline" size={52} color="#64748B" />
+          </View>
+          <Text style={styles.offlineTitle}>No internet connectivity</Text>
+          <Text style={styles.offlineText}>
+            Connect to the internet to load the map and explore content.
+          </Text>
+        </View>
+      ) : isOnline === null ? (
+        <View style={styles.offlinePane}>
+          <ActivityIndicator size="large" color={NAMIBIA_BLUE} />
+          <Text style={[styles.offlineText, { marginTop: 16 }]}>Checking connection…</Text>
+        </View>
+      ) : (
+        <ExploreMapPane bottomOffset={Math.max(insets.bottom, 12) + 56} />
+      )}
 
       <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 10) }]}>
         <Text style={styles.footerLabel}>Explorer mode</Text>
@@ -56,6 +82,37 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F8FAFC',
+  },
+  offlinePane: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 36,
+    backgroundColor: '#EEF6FC',
+  },
+  offlineIconWrap: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  offlineTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#0F172A',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  offlineText: {
+    fontSize: 14,
+    color: '#64748B',
+    textAlign: 'center',
+    lineHeight: 21,
   },
   footer: {
     flexDirection: 'row',

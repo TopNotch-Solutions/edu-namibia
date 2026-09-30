@@ -1,6 +1,6 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Platform,
   Pressable,
@@ -11,20 +11,41 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { ZoomableImage } from '@/components/ZoomableImage';
+import { TopicImageSlider } from '@/components/TopicImageSlider';
+import {
+  countSitesForCategory,
+  syncExploreEntries,
+} from '@/constants/exploreSync';
 import {
   REGION_EXPLORE_CATEGORIES,
   RegionExploreCategory,
-  getSitesForCategory,
 } from '@/constants/regionExplore';
 
 const NAMIBIA_BLUE = '#002B7F';
-const NAMIBIA_YELLOW = '#FFCE00';
 const MAP_PIN_PINK = '#E84A7F';
 
 function shortTopicLabel(title: string) {
   const first = title.split(/[&,]/)[0].trim();
   return first.length > 18 ? `${first.slice(0, 16)}…` : first;
+}
+
+function exploreCtaLabel(category: RegionExploreCategory, regionName: string) {
+  switch (category.id) {
+    case 'geography':
+      return `Explore landscapes in ${regionName}`;
+    case 'culture':
+      return `Explore culture in ${regionName}`;
+    case 'history-sites':
+      return `Explore history in ${regionName}`;
+    case 'events':
+      return `Explore events in ${regionName}`;
+    case 'gastronomy':
+      return `Explore food in ${regionName}`;
+    case 'safety':
+      return `Explore safety tips in ${regionName}`;
+    default:
+      return `Explore ${shortTopicLabel(category.title)}`;
+  }
 }
 
 export default function RegionScreen() {
@@ -43,6 +64,7 @@ export default function RegionScreen() {
   const [selectedCategoryId, setSelectedCategoryId] = useState(
     REGION_EXPLORE_CATEGORIES[0].id
   );
+  const [optionCount, setOptionCount] = useState(0);
 
   const selectedCategory: RegionExploreCategory = useMemo(() => {
     return (
@@ -51,10 +73,21 @@ export default function RegionScreen() {
     );
   }, [selectedCategoryId]);
 
-  const optionCount = useMemo(
-    () => getSitesForCategory(selectedCategory.id, regionId || undefined).length,
-    [selectedCategory.id, regionId]
-  );
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      await syncExploreEntries(true);
+      if (cancelled) return;
+      const count = await countSitesForCategory(
+        selectedCategory.id,
+        regionId || undefined
+      );
+      if (!cancelled) setOptionCount(count);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedCategory.id, regionId]);
 
   const openTopicExplore = () => {
     router.push({
@@ -66,6 +99,9 @@ export default function RegionScreen() {
       },
     });
   };
+
+  const bottomPad = Math.max(insets.bottom, 12);
+
   return (
     <View style={styles.container}>
       <LinearGradient
@@ -82,7 +118,7 @@ export default function RegionScreen() {
           <Text style={styles.backBtnText}>←</Text>
         </Pressable>
         <View style={styles.topBarText}>
-          <Text style={styles.topBarEyebrow}>Explore</Text>
+          <Text style={styles.topBarEyebrow}>Explore region</Text>
           <Text style={styles.topBarTitle} numberOfLines={1}>
             {regionName}
           </Text>
@@ -96,89 +132,78 @@ export default function RegionScreen() {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[
-          styles.scrollContent,
-          { paddingBottom: insets.bottom + 32 },
-        ]}
+        contentContainerStyle={{ paddingBottom: 24 }}
+        style={styles.scroll}
       >
-        <ZoomableImage
-          uri={selectedCategory.image}
+        <TopicImageSlider
+          key={selectedCategory.id}
+          images={selectedCategory.sliderImages}
           title={selectedCategory.title}
           style={styles.hero}
         >
-          <LinearGradient
-            colors={['transparent', 'rgba(2,6,23,0.55)', 'rgba(2,6,23,0.92)']}
-            locations={[0.15, 0.55, 1]}
-            style={StyleSheet.absoluteFill}
-          />
-          <View style={styles.heroTopRow}>
-            <View style={styles.heroPill}>
-              <Text style={styles.heroPillText}>
-                {String(selectedCategory.number).padStart(2, '0')} /{' '}
-                {String(REGION_EXPLORE_CATEGORIES.length).padStart(2, '0')}
-              </Text>
-            </View>
-          </View>
-          <View style={styles.heroBottom}>
-            <Text style={styles.heroKicker}>Topic · Tap to zoom</Text>
+          <View style={styles.heroContent}>
+            <Text style={styles.heroKicker}>Choose a topic</Text>
             <Text style={styles.heroTitle}>{selectedCategory.title}</Text>
+            <Text style={styles.heroCount}>
+              {optionCount} place{optionCount === 1 ? '' : 's'} in this region
+            </Text>
           </View>
-        </ZoomableImage>
-
-        <Text style={styles.sectionKicker}>Topics</Text>
-        <Text style={styles.sectionTitle}>What do you want to discover?</Text>
+        </TopicImageSlider>
 
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.tabRail}
+          contentContainerStyle={styles.topicChips}
         >
-          {REGION_EXPLORE_CATEGORIES.map((category) => {
-            const isSelected = selectedCategoryId === category.id;
+          {REGION_EXPLORE_CATEGORIES.map((cat) => {
+            const selected = cat.id === selectedCategoryId;
             return (
               <Pressable
-                key={category.id}
-                onPress={() => setSelectedCategoryId(category.id)}
+                key={cat.id}
+                onPress={() => setSelectedCategoryId(cat.id)}
                 style={({ pressed }) => [
-                  styles.tab,
-                  isSelected && styles.tabSelected,
+                  styles.topicChip,
+                  selected && styles.topicChipSelected,
                   pressed && styles.pressed,
                 ]}
               >
                 <Text
-                  style={[styles.tabIndex, isSelected && styles.tabIndexSelected]}
+                  style={[
+                    styles.topicChipText,
+                    selected && styles.topicChipTextSelected,
+                  ]}
                 >
-                  {String(category.number).padStart(2, '0')}
-                </Text>
-                <Text
-                  style={[styles.tabLabel, isSelected && styles.tabLabelSelected]}
-                  numberOfLines={1}
-                >
-                  {shortTopicLabel(category.title)}
+                  {shortTopicLabel(cat.title)}
                 </Text>
               </Pressable>
             );
           })}
         </ScrollView>
 
-        <View style={styles.explorePanel}>
-          <Text style={styles.explorePanelTitle}>{selectedCategory.title}</Text>
-          <Text style={styles.explorePanelText}>
-            {optionCount > 0
-              ? `${optionCount} place${optionCount === 1 ? '' : 's'} in ${regionName} with photos, descriptions, and map coordinates.`
-              : `No places listed in ${regionName} for this topic yet — see nationwide highlights instead.`}
-          </Text>
-          <Pressable
-            onPress={openTopicExplore}
-            style={({ pressed }) => [
-              styles.exploreTopicBtn,
-              pressed && styles.pressed,
-            ]}
-          >
-            <Text style={styles.exploreTopicBtnText}>Explore →</Text>
-          </Pressable>
+        <View style={styles.topicIntro}>
+          <Text style={styles.topicIntroEyebrow}>About this topic</Text>
+          <Text style={styles.topicIntroTitle}>{selectedCategory.title}</Text>
+          <Text style={styles.topicIntroText}>{selectedCategory.description}</Text>
         </View>
       </ScrollView>
+
+      <View style={[styles.bottomBar, { paddingBottom: bottomPad }]}>
+        <Pressable
+          onPress={openTopicExplore}
+          style={({ pressed }) => [styles.cta, pressed && styles.pressed]}
+          accessibilityRole="button"
+          accessibilityLabel={exploreCtaLabel(selectedCategory, regionName)}
+        >
+          <Text style={styles.ctaText} numberOfLines={2}>
+            {exploreCtaLabel(selectedCategory, regionName)}
+          </Text>
+          <Text style={styles.ctaHint}>
+            {optionCount > 0
+              ? `${optionCount} place${optionCount === 1 ? '' : 's'} ready to open`
+              : 'See what’s available in this topic'}
+          </Text>
+        </Pressable>
+      </View>
     </View>
   );
 }
@@ -187,6 +212,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F8FAFC',
+  },
+  scroll: {
+    flex: 1,
   },
   topBar: {
     flexDirection: 'row',
@@ -221,169 +249,150 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   topBarTitle: {
-    fontSize: 22,
+    fontSize: 18,
     fontWeight: '900',
     color: '#0F172A',
-    letterSpacing: -0.4,
+    letterSpacing: -0.3,
   },
   capitalChip: {
     maxWidth: 110,
-    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
     borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    backgroundColor: '#FEF3C7',
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: '#FDE68A',
   },
   capitalChipText: {
     fontSize: 11,
-    fontWeight: '700',
-    color: '#475569',
-  },
-  scrollContent: {
-    paddingTop: 4,
+    fontWeight: '800',
+    color: '#92400E',
   },
   hero: {
     height: 220,
     marginHorizontal: 16,
-    borderRadius: 28,
-    overflow: 'hidden',
-    backgroundColor: '#0F172A',
-    marginBottom: 22,
-    justifyContent: 'space-between',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#002B7F',
-        shadowOffset: { width: 0, height: 10 },
-        shadowOpacity: 0.18,
-        shadowRadius: 18,
-      },
-      android: {
-        elevation: 6,
-      },
-    }),
+    borderRadius: 24,
+    marginBottom: 14,
+    justifyContent: 'flex-end',
   },
-  heroTopRow: {
-    padding: 14,
-    alignItems: 'flex-start',
-  },
-  heroPill: {
-    backgroundColor: 'rgba(255,255,255,0.18)',
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.22)',
-  },
-  heroPillText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#FFFFFF',
-    letterSpacing: 0.6,
-  },
-  heroBottom: {
-    padding: 18,
+  heroContent: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    padding: 16,
+    paddingRight: 72,
+    zIndex: 2,
   },
   heroKicker: {
     fontSize: 11,
     fontWeight: '800',
-    color: NAMIBIA_YELLOW,
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-    marginBottom: 6,
-  },
-  heroTitle: {
-    fontSize: 24,
-    fontWeight: '900',
-    color: '#FFFFFF',
-    lineHeight: 30,
-    letterSpacing: -0.4,
-  },
-  sectionKicker: {
-    marginHorizontal: 16,
-    fontSize: 12,
-    fontWeight: '800',
-    color: MAP_PIN_PINK,
-    letterSpacing: 1,
+    color: '#FFCE00',
+    letterSpacing: 0.8,
     textTransform: 'uppercase',
     marginBottom: 4,
   },
-  sectionTitle: {
-    marginHorizontal: 16,
-    fontSize: 22,
+  heroTitle: {
+    fontSize: 20,
     fontWeight: '900',
-    color: '#0F172A',
-    letterSpacing: -0.4,
-    marginBottom: 14,
+    color: '#FFFFFF',
+    lineHeight: 26,
   },
-  tabRail: {
+  heroCount: {
+    marginTop: 6,
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#CBD5E1',
+  },
+  topicChips: {
     paddingHorizontal: 16,
     gap: 8,
     paddingBottom: 8,
   },
-  tab: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 999,
-    paddingVertical: 10,
+  topicChip: {
     paddingHorizontal: 14,
-    borderWidth: 1.5,
+    paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
     borderColor: '#E2E8F0',
   },
-  tabSelected: {
+  topicChipSelected: {
     backgroundColor: NAMIBIA_BLUE,
     borderColor: NAMIBIA_BLUE,
   },
-  tabIndex: {
-    fontSize: 11,
-    fontWeight: '900',
-    color: '#94A3B8',
+  topicChipText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#334155',
   },
-  tabIndexSelected: {
-    color: NAMIBIA_YELLOW,
-  },
-  tabLabel: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#475569',
-  },
-  tabLabelSelected: {
+  topicChipTextSelected: {
     color: '#FFFFFF',
   },
-  explorePanel: {
-    marginTop: 20,
+  topicIntro: {
     marginHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 8,
+    padding: 16,
+    borderRadius: 18,
     backgroundColor: '#FFFFFF',
-    borderRadius: 22,
-    padding: 18,
     borderWidth: 1,
     borderColor: '#E8EEF5',
   },
-  explorePanelTitle: {
+  topicIntroEyebrow: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: MAP_PIN_PINK,
+    letterSpacing: 0.7,
+    textTransform: 'uppercase',
+    marginBottom: 6,
+  },
+  topicIntroTitle: {
     fontSize: 17,
     fontWeight: '900',
     color: '#0F172A',
-    marginBottom: 6,
+    letterSpacing: -0.2,
+    marginBottom: 8,
   },
-  explorePanelText: {
-    fontSize: 13,
-    color: '#64748B',
-    lineHeight: 19,
-    marginBottom: 14,
-  },
-  exploreTopicBtn: {
-    alignSelf: 'flex-start',
-    backgroundColor: NAMIBIA_BLUE,
-    borderRadius: 999,
-    paddingHorizontal: 18,
-    paddingVertical: 12,
-  },
-  exploreTopicBtnText: {
+  topicIntroText: {
     fontSize: 14,
-    fontWeight: '800',
-    color: '#FFFFFF',
+    lineHeight: 21,
+    color: '#475569',
+    fontWeight: '500',
+  },
+  bottomBar: {
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    backgroundColor: '#FFFFFF',
+    borderTopWidth: 1,
+    borderTopColor: '#E8EEF5',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#0F172A',
+        shadowOffset: { width: 0, height: -4 },
+        shadowOpacity: 0.06,
+        shadowRadius: 10,
+      },
+      android: { elevation: 8 },
+    }),
+  },
+  cta: {
+    backgroundColor: '#FFCE00',
+    borderRadius: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+  },
+  ctaText: {
+    color: '#0F172A',
+    fontSize: 15,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  ctaHint: {
+    marginTop: 4,
+    color: 'rgba(15,23,42,0.7)',
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center',
   },
   pressed: {
     opacity: 0.85,

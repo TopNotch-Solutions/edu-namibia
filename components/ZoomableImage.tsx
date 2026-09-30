@@ -1,4 +1,4 @@
-import { Image } from 'expo-image';
+import { Image, type ImageSource } from 'expo-image';
 import React, { useEffect } from 'react';
 import {
   Dimensions,
@@ -23,14 +23,15 @@ const MAX_SCALE = 4;
 
 type ZoomableImageModalProps = {
   visible: boolean;
-  uri: string;
+  /** Remote URL or local require() / ImageSource. */
+  source: ImageSource;
   title?: string;
   onClose: () => void;
 };
 
 export function ZoomableImageModal({
   visible,
-  uri,
+  source,
   title,
   onClose,
 }: ZoomableImageModalProps) {
@@ -134,7 +135,7 @@ export function ZoomableImageModal({
         <GestureDetector gesture={composed}>
           <Animated.View style={[styles.imageWrap, animatedStyle]}>
             <Image
-              source={{ uri }}
+              source={source}
               style={styles.image}
               contentFit="contain"
               transition={150}
@@ -169,6 +170,7 @@ export function ZoomableImage({
   children,
 }: ZoomableImageProps) {
   const [open, setOpen] = React.useState(false);
+  const source = { uri };
 
   return (
     <>
@@ -178,7 +180,7 @@ export function ZoomableImage({
         accessibilityLabel={title ? `Zoom ${title}` : 'Zoom image'}
       >
         <Image
-          source={{ uri }}
+          source={source}
           style={StyleSheet.absoluteFill}
           contentFit={contentFit}
           transition={200}
@@ -191,7 +193,7 @@ export function ZoomableImage({
 
       <ZoomableImageModal
         visible={open}
-        uri={uri}
+        source={source}
         title={title}
         onClose={() => setOpen(false)}
       />

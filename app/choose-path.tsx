@@ -127,8 +127,7 @@ export default function ChoosePathScreen() {
             <Text style={[styles.cardBadge, styles.cardBadgeDark]}>Explorer</Text>
             <Text style={[styles.cardTitle, styles.cardTitleDark]}>I am an Explorer</Text>
             <Text style={[styles.cardText, styles.cardTextDark]}>
-              Discover Namibia’s regions on the map — sites, culture, events, and travel info.
-              No grade setup required.
+              Discover Namibia’s regions on the map — geography, culture, history, events, food, and safety.
             </Text>
             <Text style={[styles.cardCta, styles.cardCtaPink]}>Open Namibia Explore →</Text>
           </View>
