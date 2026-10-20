@@ -5,8 +5,10 @@ export type RegionExploreSite = {
   name: string;
   image: string;
   description: string;
-  latitude: number;
-  longitude: number;
+  latitude?: number;
+  longitude?: number;
+  /** False when coordinates were not provided for this place. */
+  hasLocation?: boolean;
 };
 
 export type RegionExploreCategory = {
@@ -75,7 +77,7 @@ export const REGION_EXPLORE_CATEGORIES: RegionExploreCategory[] = [
   {
     id: 'gastronomy',
     number: 5,
-    title: 'Gastronomy',
+    title: 'Food',
     description:
       'Taste local dishes, markets, and dining spots that celebrate regional flavours and food traditions.',
     sliderImages: [
@@ -83,20 +85,6 @@ export const REGION_EXPLORE_CATEGORIES: RegionExploreCategory[] = [
       require('../assets/sliders/gastronomy2.jpg'),
       require('../assets/sliders/gastronomy3.jpg'),
       require('../assets/sliders/gastronomy4.jpg'),
-    ],
-  },
-  {
-    id: 'safety',
-    number: 6,
-    title: 'Safety & Advisory',
-    description:
-      'Get practical guidance on road conditions, health tips, and local advisories so you explore with confidence.',
-    // Files on disk are named satety1–4.jpg
-    sliderImages: [
-      require('../assets/sliders/satety1.jpg'),
-      require('../assets/sliders/satety2.jpg'),
-      require('../assets/sliders/satety3.jpg'),
-      require('../assets/sliders/satety4.jpg'),
     ],
   },
 ];

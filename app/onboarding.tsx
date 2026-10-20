@@ -40,7 +40,7 @@ const STEPS_DATA: OnboardingStepData[] = [
     headlineHighlight: "Digital Curriculum",
     headlineSuffix: ", Anywhere",
     description:
-      "Explore official national curriculum textbooks, teacher guides, and syllabi for all Namibian grades directly on your phone or tablet.",
+      "Explore official national curriculum materials, teacher guides, and syllabi for all Namibian grades directly on your phone or tablet.",
     buttonText: "Continue →",
   },
   {
@@ -58,7 +58,7 @@ const STEPS_DATA: OnboardingStepData[] = [
     headlineHighlight: "Offline Learning",
     headlineSuffix: " Across Namibia",
     description:
-      "Pre downloaded textbooks and past papers to your device, then study anytime, anywhere without using your mobile data.",
+      "Save materials and past papers to your device, then study anytime, anywhere without using your mobile data.",
     buttonText: "Start Learning Free →",
   },
 ];

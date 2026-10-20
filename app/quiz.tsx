@@ -1,4 +1,5 @@
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Animated,
@@ -12,8 +13,13 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { CURRICULUM_SUBJECTS, getSubjectById } from '@/constants/curriculum';
+import { CURRICULUM_SUBJECTS, getSubjectById, resolveGradeId } from '@/constants/curriculum';
+import {
+  resolveSubjectStudyData,
+  syncCurriculum,
+} from '@/constants/curriculumSync';
 import { addXp, recordDailyActivity } from '@/constants/learnerStats';
+import { NAMIBIA, QUIZ_GRADIENT } from '@/constants/namibiaTheme';
 import {
   getQuizSetsForTopic,
   loadSubjectQuizProgress,
@@ -21,9 +27,9 @@ import {
   upsertTopicProgress,
   type QuizModeKey,
 } from '@/constants/quizProgress';
-import { getSubjectStudyData, QuizQuestion } from '@/constants/subjectData';
+import { QuizQuestion } from '@/constants/subjectData';
 
-const FLOWER_EMOJIS = ['🌸', '🌺', '🌻', '🌼', '🌷', '💮', '🏵️'] as const;
+const FLOWER_EMOJIS = ['🌼', '🌻', '🌱', '☀️', '✨', '💫', '🌟'] as const;
 
 type FlowerSpec = {
   id: number;
@@ -142,6 +148,7 @@ export default function QuizScreen() {
   const params = useLocalSearchParams<{
     id?: string;
     grade?: string;
+    gradeId?: string;
     mode?: string;
     topic?: string;
     quizId?: string;
@@ -151,6 +158,7 @@ export default function QuizScreen() {
 
   const subjectId = params.id || 'phys';
   const grade = params.grade || 'Grade 10';
+  const gradeId = String(resolveGradeId(params.gradeId || params.grade || grade));
   const mode = (params.mode || 'topicPractice') as QuizModeKey;
   const topicParam = params.topic ? String(params.topic) : '';
   const quizIdParam = params.quizId ? String(params.quizId) : '';
@@ -161,9 +169,23 @@ export default function QuizScreen() {
     () => getSubjectById(subjectId) ?? CURRICULUM_SUBJECTS[0],
     [subjectId]
   );
+  const [studyTick, setStudyTick] = useState(0);
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      (async () => {
+        await syncCurriculum();
+        if (active) setStudyTick((value) => value + 1);
+      })();
+      return () => {
+        active = false;
+      };
+    }, [])
+  );
   const studyData = useMemo(
-    () => getSubjectStudyData(subject.id, subject.name, subject.category),
-    [subject]
+    () =>
+      resolveSubjectStudyData(subject.id, subject.name, subject.category, gradeId),
+    [subject, gradeId, studyTick]
   );
 
   const questions: QuizQuestion[] = useMemo(() => {
@@ -414,7 +436,7 @@ export default function QuizScreen() {
   if (total === 0) {
     return (
       <View style={[styles.container, { paddingTop: insets.top }]}>
-        <View style={styles.topBar}>
+        <View style={styles.topBarLight}>
           <Pressable onPress={() => router.back()} style={styles.backBtn} hitSlop={10}>
             <Text style={styles.backBtnText}>← Back</Text>
           </Pressable>
@@ -429,27 +451,40 @@ export default function QuizScreen() {
 
   if (reviewing) {
     return (
-      <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-        <View style={styles.topBar}>
-          <Pressable
-            onPress={() => {
-              if (finished) setReviewing(false);
-              else router.back();
-            }}
-            style={styles.backBtn}
-            hitSlop={10}
-          >
-            <Text style={styles.backBtnText}>← Back</Text>
-          </Pressable>
-          <View style={styles.topTitleWrap}>
-            <Text style={styles.topTitle} numberOfLines={1}>
-              Review
-            </Text>
-            <Text style={styles.topSub} numberOfLines={1}>
-              {quizTitle} · {score}/{total}
-            </Text>
+      <View style={[styles.container, { paddingBottom: insets.bottom }]}>
+        <LinearGradient
+          colors={[...QUIZ_GRADIENT]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={[styles.quizHero, { paddingTop: insets.top + 6 }]}
+        >
+          <View style={styles.flagStrip}>
+            <View style={[styles.flagBand, { backgroundColor: NAMIBIA.blue }]} />
+            <View style={[styles.flagBand, { backgroundColor: NAMIBIA.red }]} />
+            <View style={[styles.flagBand, { backgroundColor: NAMIBIA.green }]} />
+            <View style={[styles.flagBand, { backgroundColor: NAMIBIA.yellow }]} />
           </View>
-        </View>
+          <View style={styles.topBar}>
+            <Pressable
+              onPress={() => {
+                if (finished) setReviewing(false);
+                else router.back();
+              }}
+              style={styles.backPill}
+              hitSlop={10}
+            >
+              <Text style={styles.backPillText}>←</Text>
+            </Pressable>
+            <View style={styles.topTitleWrap}>
+              <Text style={styles.topTitle} numberOfLines={1}>
+                Review answers
+              </Text>
+              <Text style={styles.topSub} numberOfLines={1}>
+                {quizTitle} · {score}/{total}
+              </Text>
+            </View>
+          </View>
+        </LinearGradient>
 
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
           {questions.map((q, idx) => {
@@ -505,9 +540,9 @@ export default function QuizScreen() {
     return (
       <View style={[styles.container, { paddingTop: insets.top }]}>
         {isPerfect && <FallingFlowers />}
-        <View style={styles.topBar}>
+        <View style={styles.topBarLight}>
           <View style={styles.topSpacer} />
-          <Text style={styles.topTitle} numberOfLines={1}>
+          <Text style={styles.topTitleDark} numberOfLines={1}>
             Results
           </Text>
           <View style={styles.topSpacer} />
@@ -601,48 +636,64 @@ export default function QuizScreen() {
   }
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-      <View style={styles.topBar}>
-        <Pressable onPress={() => router.back()} style={styles.backBtn} hitSlop={10}>
-          <Text style={styles.backBtnText}>← Back</Text>
-        </Pressable>
-        <View style={styles.topTitleWrap}>
-          <Text style={styles.topTitle} numberOfLines={1}>
-            {quizTitle}
-          </Text>
-          <Text style={styles.topSub} numberOfLines={1}>
-            {topicParam ? `${topicParam} · ` : ''}
-            {subject.name} · {grade}
-          </Text>
+    <View style={[styles.container, { paddingBottom: insets.bottom }]}>
+      <LinearGradient
+        colors={[...QUIZ_GRADIENT]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={[styles.quizHero, { paddingTop: insets.top + 6 }]}
+      >
+        <View style={styles.flagStrip}>
+          <View style={[styles.flagBand, { backgroundColor: NAMIBIA.blue }]} />
+          <View style={[styles.flagBand, { backgroundColor: NAMIBIA.red }]} />
+          <View style={[styles.flagBand, { backgroundColor: NAMIBIA.green }]} />
+          <View style={[styles.flagBand, { backgroundColor: NAMIBIA.yellow }]} />
         </View>
-        <View style={styles.scoreChip}>
-          <Text style={styles.scoreChipText}>
-            {score}/{total}
-          </Text>
-        </View>
-      </View>
 
-      <View style={styles.progressTrack}>
-        <View style={[styles.progressFill, { width: `${Math.max(6, progressRatio * 100)}%` }]} />
-      </View>
+        <View style={styles.topBar}>
+          <Pressable onPress={() => router.back()} style={styles.backPill} hitSlop={10}>
+            <Text style={styles.backPillText}>←</Text>
+          </Pressable>
+          <View style={styles.topTitleWrap}>
+            <Text style={styles.topTitle} numberOfLines={1}>
+              {quizTitle}
+            </Text>
+            <Text style={styles.topSub} numberOfLines={1}>
+              {topicParam ? `${topicParam} · ` : ''}
+              {subject.name}
+            </Text>
+          </View>
+          <View style={styles.scoreChip}>
+            <Text style={styles.scoreChipText}>
+              {score}/{total}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.progressTrack}>
+          <View style={styles.progressTrackBg} />
+          <LinearGradient
+            colors={[NAMIBIA.green, NAMIBIA.yellow]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={[styles.progressFill, { width: `${Math.max(8, progressRatio * 100)}%` }]}
+          />
+        </View>
+        <Text style={styles.progressLabel}>
+          Question {currentIndex + 1} of {total}
+          {bestTotal > 0 ? `  ·  Best ${bestScore}/${bestTotal}` : ''}
+        </Text>
+      </LinearGradient>
 
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.questionMeta}>
-          <Text style={styles.questionCount}>
-            Question {currentIndex + 1} of {total}
-          </Text>
-          {bestTotal > 0 && (
-            <Text style={styles.bestHint}>
-              Best {bestScore}/{bestTotal}
-            </Text>
-          )}
+        <View style={styles.promptCard}>
+          <Text style={styles.promptKicker}>Choose the best answer</Text>
+          <Text style={styles.prompt}>{activeQuestion.question}</Text>
         </View>
-
-        <Text style={styles.prompt}>{activeQuestion.question}</Text>
 
         <View style={styles.options}>
           {activeQuestion.options.map((option, optIdx) => {
@@ -651,7 +702,7 @@ export default function QuizScreen() {
             const showCorrect = hasAnswered && isCorrect;
             const showIncorrect = hasAnswered && isSelected && !isCorrect;
             const showSelected = !hasAnswered && isSelected;
-            const letter = ['A', 'B', 'C', 'D'][optIdx];
+            const letter = ['A', 'B', 'C', 'D', 'E', 'F'][optIdx] || String(optIdx + 1);
 
             return (
               <Pressable
@@ -669,6 +720,7 @@ export default function QuizScreen() {
                 <View
                   style={[
                     styles.optionLetter,
+                    showSelected && styles.optionLetterSelected,
                     showCorrect && styles.optionLetterCorrect,
                     showIncorrect && styles.optionLetterIncorrect,
                   ]}
@@ -676,8 +728,8 @@ export default function QuizScreen() {
                   <Text
                     style={[
                       styles.optionLetterText,
-                      showCorrect && styles.optionLetterTextCorrect,
-                      showIncorrect && styles.optionLetterTextIncorrect,
+                      (showSelected || showCorrect || showIncorrect) &&
+                        styles.optionLetterTextOnColor,
                     ]}
                   >
                     {letter}
@@ -700,7 +752,14 @@ export default function QuizScreen() {
         </View>
 
         {hasAnswered && (
-          <View style={styles.explainBox}>
+          <View
+            style={[
+              styles.explainBox,
+              selectedOptionIndex === activeQuestion.correctIndex
+                ? styles.explainBoxCorrect
+                : styles.explainBoxIncorrect,
+            ]}
+          >
             <Text
               style={[
                 styles.explainTitle,
@@ -709,7 +768,9 @@ export default function QuizScreen() {
                   : styles.explainTitleIncorrect,
               ]}
             >
-              {selectedOptionIndex === activeQuestion.correctIndex ? 'Correct' : 'Incorrect'}
+              {selectedOptionIndex === activeQuestion.correctIndex
+                ? 'Correct — well done'
+                : 'Not quite — keep learning'}
             </Text>
             <Text style={styles.explainText}>{activeQuestion.explanation}</Text>
 
@@ -718,7 +779,7 @@ export default function QuizScreen() {
               style={({ pressed }) => [styles.nextQuestionBtn, pressed && styles.pressed]}
             >
               <Text style={styles.nextQuestionBtnText}>
-                {currentIndex < total - 1 ? 'Next question →' : 'See score'}
+                {currentIndex < total - 1 ? 'Next question →' : 'See your score'}
               </Text>
             </Pressable>
           </View>
@@ -731,7 +792,7 @@ export default function QuizScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8FAFC',
+    backgroundColor: NAMIBIA.sand,
   },
   centered: {
     flex: 1,
@@ -741,29 +802,57 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     fontSize: 14,
-    color: '#64748B',
+    color: NAMIBIA.muted,
     fontWeight: '600',
   },
   emptyTitle: {
     fontSize: 18,
     fontWeight: '800',
-    color: '#0F172A',
+    color: NAMIBIA.ink,
     marginBottom: 6,
   },
   emptySub: {
     fontSize: 13,
-    color: '#64748B',
+    color: NAMIBIA.muted,
     textAlign: 'center',
+  },
+  quizHero: {
+    paddingHorizontal: 16,
+    paddingBottom: 14,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+    overflow: 'hidden',
+  },
+  flagStrip: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 4,
+    flexDirection: 'row',
+  },
+  flagBand: {
+    flex: 1,
   },
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 10,
+    marginBottom: 14,
+  },
+  topBarLight: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 16,
     paddingVertical: 12,
-    backgroundColor: '#FFFFFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#E2E8F0',
     gap: 10,
+  },
+  topTitleDark: {
+    flex: 1,
+    textAlign: 'center',
+    fontSize: 16,
+    fontWeight: '800',
+    color: NAMIBIA.ink,
   },
   backBtn: {
     paddingVertical: 6,
@@ -772,7 +861,22 @@ const styles = StyleSheet.create({
   backBtnText: {
     fontSize: 14,
     fontWeight: '700',
-    color: '#0F172A',
+    color: NAMIBIA.ink,
+  },
+  backPill: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+  },
+  backPillText: {
+    color: NAMIBIA.white,
+    fontSize: 16,
+    fontWeight: '800',
   },
   topTitleWrap: {
     flex: 1,
@@ -780,36 +884,46 @@ const styles = StyleSheet.create({
   topTitle: {
     fontSize: 15,
     fontWeight: '800',
-    color: '#0F172A',
+    color: NAMIBIA.white,
   },
   topSub: {
     fontSize: 11,
-    color: '#64748B',
+    color: 'rgba(255,255,255,0.72)',
     marginTop: 1,
   },
   topSpacer: {
     width: 56,
   },
   scoreChip: {
-    backgroundColor: '#F1F5F9',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    backgroundColor: NAMIBIA.yellow,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
     borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
   },
   scoreChipText: {
     fontSize: 12,
     fontWeight: '800',
-    color: '#334155',
+    color: NAMIBIA.ink,
   },
   progressTrack: {
-    height: 4,
-    backgroundColor: '#E2E8F0',
+    height: 8,
+    borderRadius: 999,
+    overflow: 'hidden',
+    marginBottom: 8,
+    position: 'relative',
+  },
+  progressTrackBg: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(255,255,255,0.2)',
   },
   progressFill: {
-    height: 4,
-    backgroundColor: '#0F172A',
+    height: 8,
+    borderRadius: 999,
+  },
+  progressLabel: {
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 11,
+    fontWeight: '700',
   },
   scroll: {
     flex: 1,
@@ -817,6 +931,27 @@ const styles = StyleSheet.create({
   scrollContent: {
     padding: 16,
     paddingBottom: 36,
+  },
+  promptCard: {
+    backgroundColor: NAMIBIA.white,
+    borderRadius: 20,
+    padding: 18,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: NAMIBIA.line,
+    shadowColor: NAMIBIA.blue,
+    shadowOpacity: 0.08,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 3,
+  },
+  promptKicker: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: NAMIBIA.blue,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    marginBottom: 8,
   },
   questionMeta: {
     flexDirection: 'row',
@@ -827,19 +962,18 @@ const styles = StyleSheet.create({
   questionCount: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#64748B',
+    color: NAMIBIA.muted,
   },
   bestHint: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#475569',
+    color: NAMIBIA.muted,
   },
   prompt: {
     fontSize: 18,
     fontWeight: '800',
-    color: '#0F172A',
+    color: NAMIBIA.ink,
     lineHeight: 26,
-    marginBottom: 18,
   },
   options: {
     gap: 10,
@@ -847,67 +981,69 @@ const styles = StyleSheet.create({
   option: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
+    backgroundColor: NAMIBIA.white,
+    borderRadius: 16,
     padding: 14,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderWidth: 1.5,
+    borderColor: NAMIBIA.line,
   },
   optionSelected: {
-    borderColor: '#64748B',
-    backgroundColor: '#F8FAFC',
+    borderColor: NAMIBIA.blue,
+    backgroundColor: NAMIBIA.blueSoft,
   },
   optionCorrect: {
-    borderColor: '#009A44',
-    backgroundColor: '#ECFDF5',
+    borderColor: NAMIBIA.green,
+    backgroundColor: NAMIBIA.greenSoft,
   },
   optionIncorrect: {
-    borderColor: '#D21034',
-    backgroundColor: '#FEF2F2',
+    borderColor: NAMIBIA.red,
+    backgroundColor: NAMIBIA.redSoft,
   },
   optionLetter: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#F1F5F9',
+    width: 32,
+    height: 32,
+    borderRadius: 11,
+    backgroundColor: NAMIBIA.blueSoft,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
+  },
+  optionLetterSelected: {
+    backgroundColor: NAMIBIA.blue,
   },
   optionLetterCorrect: {
-    backgroundColor: '#009A44',
-    borderColor: '#009A44',
+    backgroundColor: NAMIBIA.green,
   },
   optionLetterIncorrect: {
-    backgroundColor: '#D21034',
-    borderColor: '#D21034',
+    backgroundColor: NAMIBIA.red,
   },
   optionLetterText: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '800',
-    color: '#334155',
+    color: NAMIBIA.blue,
+  },
+  optionLetterTextOnColor: {
+    color: NAMIBIA.white,
   },
   optionLetterTextCorrect: {
-    color: '#FFFFFF',
+    color: NAMIBIA.white,
   },
   optionLetterTextIncorrect: {
-    color: '#FFFFFF',
+    color: NAMIBIA.white,
   },
   optionText: {
     flex: 1,
     fontSize: 14,
     fontWeight: '600',
-    color: '#1E293B',
+    color: NAMIBIA.ink,
     lineHeight: 20,
   },
   optionTextCorrect: {
-    color: '#166534',
+    color: NAMIBIA.greenDeep,
     fontWeight: '700',
   },
   optionTextIncorrect: {
-    color: '#991B1B',
+    color: '#8B1024',
     fontWeight: '700',
   },
   feedback: {
@@ -916,77 +1052,84 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   feedbackCorrect: {
-    color: '#009A44',
+    color: NAMIBIA.green,
   },
   feedbackIncorrect: {
-    color: '#D21034',
+    color: NAMIBIA.red,
   },
   explainBox: {
     marginTop: 18,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
+    backgroundColor: NAMIBIA.white,
+    borderRadius: 18,
     padding: 16,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderWidth: 1.5,
+  },
+  explainBoxCorrect: {
+    borderColor: NAMIBIA.green,
+    backgroundColor: NAMIBIA.greenSoft,
+  },
+  explainBoxIncorrect: {
+    borderColor: NAMIBIA.red,
+    backgroundColor: NAMIBIA.redSoft,
   },
   explainTitle: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '800',
-    color: '#0F172A',
+    color: NAMIBIA.ink,
     marginBottom: 6,
   },
   explainTitleCorrect: {
-    color: '#009A44',
+    color: NAMIBIA.greenDeep,
   },
   explainTitleIncorrect: {
-    color: '#D21034',
+    color: NAMIBIA.red,
   },
   explainText: {
     fontSize: 13,
-    color: '#334155',
+    color: NAMIBIA.ink,
     lineHeight: 20,
     marginBottom: 14,
   },
   nextQuestionBtn: {
-    backgroundColor: '#FFCE00',
+    backgroundColor: NAMIBIA.yellow,
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: 'center',
   },
   nextQuestionBtnText: {
-    color: '#0F172A',
+    color: NAMIBIA.ink,
     fontSize: 14,
     fontWeight: '800',
   },
   primaryBtn: {
-    backgroundColor: '#0F172A',
+    backgroundColor: NAMIBIA.blue,
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: 'center',
   },
   primaryBtnText: {
-    color: '#FFFFFF',
+    color: NAMIBIA.white,
     fontSize: 14,
     fontWeight: '800',
   },
   secondaryBtn: {
     marginTop: 10,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: NAMIBIA.white,
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: NAMIBIA.line,
   },
   secondaryBtnText: {
-    color: '#0F172A',
+    color: NAMIBIA.ink,
     fontSize: 14,
     fontWeight: '700',
   },
   competitionLockNote: {
     marginTop: 10,
     marginBottom: 2,
-    backgroundColor: '#F1F5F9',
+    backgroundColor: NAMIBIA.blueSoft,
     borderRadius: 12,
     paddingVertical: 12,
     paddingHorizontal: 14,
@@ -994,7 +1137,7 @@ const styles = StyleSheet.create({
   competitionLockNoteText: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#475569',
+    color: NAMIBIA.muted,
     textAlign: 'center',
     lineHeight: 18,
   },
@@ -1002,7 +1145,7 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   scoreHero: {
-    backgroundColor: '#0F172A',
+    backgroundColor: NAMIBIA.blueDeep,
     borderRadius: 24,
     paddingVertical: 28,
     paddingHorizontal: 20,
@@ -1022,7 +1165,7 @@ const styles = StyleSheet.create({
   scoreFlagLabel: {
     fontSize: 13,
     fontWeight: '800',
-    color: '#E2E8F0',
+    color: NAMIBIA.yellow,
     letterSpacing: 0.6,
   },
   scoreFlagStripes: {
@@ -1039,41 +1182,41 @@ const styles = StyleSheet.create({
   scoreHeroLabel: {
     fontSize: 13,
     fontWeight: '700',
-    color: '#CBD5E1',
+    color: 'rgba(255,255,255,0.75)',
     marginBottom: 8,
   },
   scoreHeroValue: {
     fontSize: 44,
     fontWeight: '900',
-    color: '#FFFFFF',
+    color: NAMIBIA.white,
     letterSpacing: -1,
   },
   scoreHeroPercent: {
     marginTop: 4,
     fontSize: 16,
     fontWeight: '700',
-    color: '#E2E8F0',
+    color: NAMIBIA.yellow,
   },
   reviewAnswersBtn: {
-    backgroundColor: '#002B7F',
+    backgroundColor: NAMIBIA.blue,
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: 'center',
   },
   reviewAnswersBtnText: {
-    color: '#FFFFFF',
+    color: NAMIBIA.white,
     fontSize: 14,
     fontWeight: '800',
   },
   tryAgainBtn: {
     marginTop: 10,
-    backgroundColor: '#009A44',
+    backgroundColor: NAMIBIA.green,
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: 'center',
   },
   tryAgainBtnText: {
-    color: '#FFFFFF',
+    color: NAMIBIA.white,
     fontSize: 14,
     fontWeight: '800',
   },
@@ -1083,7 +1226,7 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: '#D21034',
+    backgroundColor: NAMIBIA.red,
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 20,
@@ -1094,7 +1237,7 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
   },
   floatingBackBtnIcon: {
-    color: '#FFFFFF',
+    color: NAMIBIA.white,
     fontSize: 24,
     fontWeight: '800',
     marginTop: -1,
@@ -1113,11 +1256,11 @@ const styles = StyleSheet.create({
     top: 0,
   },
   resultsMetaCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: NAMIBIA.white,
     borderRadius: 16,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: NAMIBIA.line,
     marginBottom: 20,
     gap: 12,
   },
@@ -1129,21 +1272,21 @@ const styles = StyleSheet.create({
   resultsMetaLabel: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#64748B',
+    color: NAMIBIA.muted,
   },
   resultsMetaValue: {
     flex: 1,
     textAlign: 'right',
     fontSize: 13,
     fontWeight: '700',
-    color: '#0F172A',
+    color: NAMIBIA.ink,
   },
   reviewCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: NAMIBIA.white,
     borderRadius: 16,
     padding: 14,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: NAMIBIA.line,
     marginBottom: 12,
   },
   reviewHeader: {
@@ -1155,7 +1298,7 @@ const styles = StyleSheet.create({
   reviewIndex: {
     fontSize: 12,
     fontWeight: '800',
-    color: '#64748B',
+    color: NAMIBIA.muted,
   },
   reviewBadge: {
     fontSize: 11,
@@ -1166,17 +1309,17 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   reviewOk: {
-    backgroundColor: '#DCFCE7',
-    color: '#166534',
+    backgroundColor: NAMIBIA.greenSoft,
+    color: NAMIBIA.greenDeep,
   },
   reviewBad: {
-    backgroundColor: '#FEE2E2',
-    color: '#991B1B',
+    backgroundColor: NAMIBIA.redSoft,
+    color: NAMIBIA.red,
   },
   reviewPrompt: {
     fontSize: 14,
     fontWeight: '700',
-    color: '#0F172A',
+    color: NAMIBIA.ink,
     lineHeight: 20,
     marginBottom: 10,
   },
@@ -1185,39 +1328,40 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     borderRadius: 10,
     marginBottom: 6,
-    backgroundColor: '#F8FAFC',
+    backgroundColor: NAMIBIA.sand,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: NAMIBIA.line,
   },
   reviewOptionCorrect: {
-    borderColor: '#009A44',
-    backgroundColor: '#ECFDF5',
+    borderColor: NAMIBIA.green,
+    backgroundColor: NAMIBIA.greenSoft,
   },
   reviewOptionWrong: {
-    borderColor: '#D21034',
-    backgroundColor: '#FEF2F2',
+    borderColor: NAMIBIA.red,
+    backgroundColor: NAMIBIA.redSoft,
   },
   reviewOptionText: {
     fontSize: 13,
-    color: '#334155',
+    color: NAMIBIA.ink,
     lineHeight: 18,
     fontWeight: '600',
   },
   reviewOptionTextCorrect: {
-    color: '#166534',
+    color: NAMIBIA.greenDeep,
     fontWeight: '700',
   },
   reviewOptionTextWrong: {
-    color: '#991B1B',
+    color: NAMIBIA.red,
     fontWeight: '700',
   },
   reviewExplain: {
     marginTop: 8,
     fontSize: 12,
-    color: '#64748B',
+    color: NAMIBIA.muted,
     lineHeight: 18,
   },
   pressed: {
-    opacity: 0.85,
+    opacity: 0.88,
   },
 });
+

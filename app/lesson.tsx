@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LessonVisual } from '@/components/lessons/LessonVisual';
 import { LabStage } from '@/components/labs/LabStage';
 import { getLessonById, getNextLesson } from '@/constants/content';
+import { hydrateLessonsFromCache, syncLessons } from '@/constants/lessonSync';
 import { getStreak, recordDailyActivity } from '@/constants/learnerStats';
 import {
   awardComponent,
@@ -14,7 +15,7 @@ import {
   resetLesson,
   type LessonProgress,
 } from '@/constants/lessonProgress';
-import type { LabGoalStep, ReadCard } from '@/constants/lessonTypes';
+import type { LabGoalStep, Lesson, ReadCard } from '@/constants/lessonTypes';
 
 type Phase = 'read' | 'lab' | 'check' | 'done';
 
@@ -23,7 +24,36 @@ export default function LessonScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
-  const lesson = params.lessonId ? getLessonById(String(params.lessonId)) : undefined;
+  const [lesson, setLesson] = useState<Lesson | undefined>(() =>
+    params.lessonId ? getLessonById(String(params.lessonId)) : undefined
+  );
+  const [lessonReady, setLessonReady] = useState(Boolean(lesson));
+
+  useEffect(() => {
+    let active = true;
+    const lessonId = params.lessonId ? String(params.lessonId) : '';
+    if (!lessonId) {
+      setLesson(undefined);
+      setLessonReady(true);
+      return;
+    }
+
+    (async () => {
+      await hydrateLessonsFromCache();
+      let found = getLessonById(lessonId);
+      if (!found) {
+        await syncLessons();
+        found = getLessonById(lessonId);
+      }
+      if (!active) return;
+      setLesson(found);
+      setLessonReady(true);
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [params.lessonId]);
 
   const [phase, setPhase] = useState<Phase>('read');
   const [readIndex, setReadIndex] = useState(0);
@@ -65,6 +95,14 @@ export default function LessonScreen() {
   // Stable identities — the lab reports through these on every render.
   const handleGoalReached = useCallback(() => setLabGoalMet(true), []);
   const handleLabProgress = useCallback((steps: LabGoalStep[]) => setLabSteps(steps), []);
+
+  if (!lessonReady) {
+    return (
+      <View style={[styles.container, styles.centered, { paddingTop: insets.top }]}>
+        <Text style={styles.missingBody}>Loading lesson…</Text>
+      </View>
+    );
+  }
 
   if (!lesson) {
     return (

@@ -1,23 +1,43 @@
 import type { GradeId, GradeSubjectContent, Lesson, LessonUnit } from '@/constants/lessonTypes';
-import { GR8_PHYSICAL_SCIENCE } from './gr8-phys';
 
 /**
- * Lesson content, keyed by grade and then subject.
- *
- * Grades that have no entry here fall back to the legacy accordion driven by
- * constants/subjectData.ts, so nothing regresses while content is written.
+ * Bundled lesson content is intentionally empty — lessons come from the portal only.
+ * Remote packs are merged via mergeRemoteLessonPacks().
  */
-const CONTENT: Partial<Record<GradeId, Record<string, GradeSubjectContent>>> = {
-  gr8: {
-    phys: GR8_PHYSICAL_SCIENCE,
-  },
-};
+const BUNDLED: Partial<Record<GradeId, Record<string, GradeSubjectContent>>> = {};
+
+/** Portal-published packs, keyed the same way as bundled content. */
+let remoteContent: Partial<Record<GradeId, Record<string, GradeSubjectContent>>> = {};
+
+export type RemoteLessonPack = GradeSubjectContent;
+
+function clonePack(pack: GradeSubjectContent): GradeSubjectContent {
+  return {
+    ...pack,
+    units: pack.units.map((unit) => ({
+      ...unit,
+      lessons: unit.lessons.map((lesson) => ({ ...lesson })),
+    })),
+  };
+}
+
+/** Replace the in-memory remote registry (called after sync / cache hydrate). */
+export function mergeRemoteLessonPacks(packs: RemoteLessonPack[]) {
+  const next: Partial<Record<GradeId, Record<string, GradeSubjectContent>>> = {};
+  for (const pack of packs) {
+    if (!pack?.gradeId || !pack?.subjectId || !Array.isArray(pack.units)) continue;
+    const gradeId = pack.gradeId as GradeId;
+    if (!next[gradeId]) next[gradeId] = {};
+    next[gradeId]![pack.subjectId] = clonePack(pack);
+  }
+  remoteContent = next;
+}
 
 export function getGradeSubjectContent(
   gradeId: GradeId,
   subjectId: string
 ): GradeSubjectContent | undefined {
-  return CONTENT[gradeId]?.[subjectId];
+  return remoteContent[gradeId]?.[subjectId] ?? BUNDLED[gradeId]?.[subjectId];
 }
 
 export function hasLessonContent(gradeId: GradeId, subjectId: string): boolean {
@@ -33,8 +53,12 @@ export function getAllLessons(gradeId: GradeId, subjectId: string): Lesson[] {
   return getLessonUnits(gradeId, subjectId).flatMap((unit) => unit.lessons);
 }
 
-export function getLessonById(lessonId: string): Lesson | undefined {
-  for (const bySubject of Object.values(CONTENT)) {
+function findLessonInStore(
+  store: Partial<Record<GradeId, Record<string, GradeSubjectContent>>>,
+  lessonId: string
+): Lesson | undefined {
+  for (const bySubject of Object.values(store)) {
+    if (!bySubject) continue;
     for (const content of Object.values(bySubject)) {
       for (const unit of content.units) {
         const found = unit.lessons.find((lesson) => lesson.id === lessonId);
@@ -43,6 +67,12 @@ export function getLessonById(lessonId: string): Lesson | undefined {
     }
   }
   return undefined;
+}
+
+export function getLessonById(lessonId: string): Lesson | undefined {
+  return (
+    findLessonInStore(remoteContent, lessonId) ?? findLessonInStore(BUNDLED, lessonId)
+  );
 }
 
 export function getUnitForLesson(lesson: Lesson): LessonUnit | undefined {

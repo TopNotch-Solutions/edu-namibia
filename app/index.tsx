@@ -8,7 +8,7 @@ const TOTAL_DURATION_MS = 4000;
 
 const ANIMATED_WORDS = [
   { word: 'Access', subtitle: 'Curriculum materials digitally' },
-  { word: 'Learn', subtitle: 'Textbooks, guides & past exam papers' },
+  { word: 'Learn', subtitle: 'Materials, guides & past exam papers' },
   { word: 'Empower', subtitle: 'Quality education anytime, anywhere' },
   { word: 'Succeed', subtitle: 'Building the future of Namibia' },
 ];

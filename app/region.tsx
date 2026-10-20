@@ -41,8 +41,6 @@ function exploreCtaLabel(category: RegionExploreCategory, regionName: string) {
       return `Explore events in ${regionName}`;
     case 'gastronomy':
       return `Explore food in ${regionName}`;
-    case 'safety':
-      return `Explore safety tips in ${regionName}`;
     default:
       return `Explore ${shortTopicLabel(category.title)}`;
   }

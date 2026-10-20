@@ -1,12 +1,16 @@
+import Constants from 'expo-constants';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
-SplashScreen.setOptions({
-  duration: 400,
-  fade: true,
-});
+// setOptions is only supported in development/production builds, not Expo Go.
+if (Constants.appOwnership !== 'expo') {
+  SplashScreen.setOptions({
+    duration: 400,
+    fade: true,
+  });
+}
 
 export default function RootLayout() {
   return (

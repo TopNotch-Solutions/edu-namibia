@@ -1,4 +1,13 @@
 import type { GradeId } from './lessonTypes';
+import { PRIMARY_SUBJECTS } from './primaryGrades';
+
+export type SubjectCategory =
+  | 'Sciences'
+  | 'Languages'
+  | 'Commercials'
+  | 'Humanities'
+  | 'Arts'
+  | 'Life Skills';
 
 export interface GradeOption {
   id: string;
@@ -11,13 +20,17 @@ export interface SubjectOption {
   id: string;
   name: string;
   code: string;
-  category: 'Sciences' | 'Languages' | 'Commercials' | 'Humanities';
+  category: SubjectCategory;
   icon: string;
   namibianImage: string;
   namibianContext: string;
   accentColor: string;
   gradientColors: [string, string];
   availableMaterialsCount: number;
+  /** If set, subject is only offered for these grades. If omitted, secondary grades. */
+  grades?: GradeId[];
+  /** Optional topic outline keyed by grade id. */
+  topicsByGrade?: Partial<Record<GradeId, string[]>>;
 }
 
 export const GRADE_OPTIONS: GradeOption[] = [
@@ -26,10 +39,20 @@ export const GRADE_OPTIONS: GradeOption[] = [
   { id: 'gr10', name: 'Grade 10', phase: 'Senior Secondary', icon: '📖' },
   { id: 'gr9', name: 'Grade 9', phase: 'Junior Secondary', icon: '📐' },
   { id: 'gr8', name: 'Grade 8', phase: 'Junior Secondary', icon: '🎒' },
-  { id: 'primary', name: 'Primary (Grades 1 – 7)', phase: 'Primary Education', icon: '✏️' },
+  { id: 'gr7', name: 'Grade 7', phase: 'Primary Education', icon: '✏️' },
+  { id: 'gr6', name: 'Grade 6', phase: 'Primary Education', icon: '✏️' },
+  { id: 'gr5', name: 'Grade 5', phase: 'Primary Education', icon: '✏️' },
+  { id: 'gr4', name: 'Grade 4', phase: 'Primary Education', icon: '✏️' },
+  { id: 'gr3', name: 'Grade 3', phase: 'Primary Education', icon: '✏️' },
+  { id: 'gr2', name: 'Grade 2', phase: 'Primary Education', icon: '✏️' },
+  { id: 'gr1', name: 'Grade 1', phase: 'Primary Education', icon: '✏️' },
+  { id: 'gr0', name: 'Grade 0', phase: 'Pre-Primary', icon: '🌟' },
 ];
 
-export const CURRICULUM_SUBJECTS: SubjectOption[] = [
+/** Grades that use the secondary (NSSCO / junior–senior) subject catalog. */
+export const SECONDARY_GRADES: GradeId[] = ['gr8', 'gr9', 'gr10', 'gr11', 'gr12'];
+
+const SECONDARY_SUBJECTS: SubjectOption[] = [
   // Sciences & Tech
   {
     id: 'math',
@@ -267,6 +290,36 @@ export const CURRICULUM_SUBJECTS: SubjectOption[] = [
   },
 ];
 
+export const CURRICULUM_SUBJECTS: SubjectOption[] = [
+  ...PRIMARY_SUBJECTS,
+  ...SECONDARY_SUBJECTS,
+];
+
+export function isSubjectAvailableForGrade(
+  subject: SubjectOption,
+  gradeId: GradeId | string
+): boolean {
+  if (subject.grades && subject.grades.length > 0) {
+    return subject.grades.includes(gradeId as GradeId);
+  }
+  // Legacy secondary catalog entries (no grades field)
+  return SECONDARY_GRADES.includes(gradeId as GradeId);
+}
+
+export function getSubjectsForGrade(gradeId: GradeId | string): SubjectOption[] {
+  return CURRICULUM_SUBJECTS.filter((subject) =>
+    isSubjectAvailableForGrade(subject, gradeId)
+  );
+}
+
+export function getSubjectTopics(
+  subjectId: string,
+  gradeId: GradeId | string
+): string[] {
+  const subject = getSubjectById(subjectId);
+  return subject?.topicsByGrade?.[gradeId as GradeId] ?? [];
+}
+
 export function getSubjectById(id: string): SubjectOption | undefined {
   return CURRICULUM_SUBJECTS.find((sub) => sub.id === id);
 }
@@ -283,6 +336,8 @@ export function getGradeLabel(id: string): string {
 /** Resolves a stored value that may be a grade id or a legacy display name. */
 export function resolveGradeId(value: string | undefined | null): GradeId {
   if (!value) return 'gr11';
+  // Legacy bundled primary option → Grade 1
+  if (value === 'primary' || value === 'Primary (Grades 1 – 7)') return 'gr1';
   if (getGradeById(value)) return value as GradeId;
   const byName = GRADE_OPTIONS.find((grade) => grade.name === value);
   return (byName?.id ?? 'gr11') as GradeId;

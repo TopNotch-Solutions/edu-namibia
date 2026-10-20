@@ -26,6 +26,7 @@ import { REGION_EXPLORE_CATEGORIES } from '@/constants/regionExplore';
 const NAMIBIA_BLUE = '#002B7F';
 const NAMIBIA_YELLOW = '#FFCE00';
 const MAP_PIN_PINK = '#E84A7F';
+const PAGE_SIZE = 30;
 
 type ListedSite = {
   subtopicTitle: string;
@@ -87,31 +88,22 @@ export default function RegionTopicScreen() {
   const [loading, setLoading] = useState(true);
   const [showingNationwide, setShowingNationwide] = useState(false);
   const [sites, setSites] = useState<ListedSite[]>([]);
+  const [page, setPage] = useState(1);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoading(true);
+      setPage(1);
       await syncExploreEntries(true);
       if (cancelled) return;
 
       let regional = params.regionId
         ? await getSitesForCategoryMerged(category.id, params.regionId)
-        : [];
-
-      let nationwide = false;
-      if (!params.regionId || regional.length === 0) {
-        const all = await getNationwideSitesForCategory(category.id);
-        if (params.regionId && regional.length === 0 && all.length > 0) {
-          nationwide = true;
-          regional = all;
-        } else if (!params.regionId) {
-          regional = all;
-        }
-      }
+        : await getNationwideSitesForCategory(category.id);
 
       if (!cancelled) {
-        setShowingNationwide(nationwide);
+        setShowingNationwide(!params.regionId);
         setSites(regional);
         setLoading(false);
       }
@@ -120,6 +112,12 @@ export default function RegionTopicScreen() {
       cancelled = true;
     };
   }, [category.id, params.regionId]);
+
+  const totalPages = Math.max(1, Math.ceil(sites.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pageSites = sites.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  const showingFrom = sites.length === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1;
+  const showingTo = Math.min(currentPage * PAGE_SIZE, sites.length);
 
   return (
     <View style={styles.container}>
@@ -202,11 +200,11 @@ export default function RegionTopicScreen() {
                 {showingNationwide ? 'Across Namibia' : `In ${regionName}`}
               </Text>
               <Text style={styles.listSubtitle}>
-                Tap a photo to zoom · Explore for map details
+                Showing {showingFrom}–{showingTo} of {sites.length} · Tap a photo to zoom
               </Text>
             </View>
 
-            {sites.map(({ subtopicTitle, site }) => (
+            {pageSites.map(({ subtopicTitle, site }) => (
               <View key={site.id} style={styles.siteCard}>
                 <ZoomableImage
                   uri={site.image}
@@ -223,7 +221,13 @@ export default function RegionTopicScreen() {
                   </Text>
                   <View style={styles.siteFooter}>
                     <Text style={styles.siteCoords}>
-                      {site.latitude.toFixed(2)}°, {site.longitude.toFixed(2)}°
+                      {site.hasLocation &&
+                      site.latitude != null &&
+                      site.longitude != null
+                        ? `${site.latitude.toFixed(2)}°, ${site.longitude.toFixed(2)}°`
+                        : site.address
+                          ? site.address
+                          : 'No map location'}
                     </Text>
                     <Pressable
                       onPress={() =>
@@ -246,6 +250,36 @@ export default function RegionTopicScreen() {
                 </View>
               </View>
             ))}
+
+            {totalPages > 1 ? (
+              <View style={styles.pagination}>
+                <Pressable
+                  onPress={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={currentPage <= 1}
+                  style={({ pressed }) => [
+                    styles.pageBtn,
+                    currentPage <= 1 && styles.pageBtnDisabled,
+                    pressed && currentPage > 1 && styles.pressed,
+                  ]}
+                >
+                  <Text style={styles.pageBtnText}>‹ Prev</Text>
+                </Pressable>
+                <Text style={styles.pageStatus}>
+                  Page {currentPage} of {totalPages}
+                </Text>
+                <Pressable
+                  onPress={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={currentPage >= totalPages}
+                  style={({ pressed }) => [
+                    styles.pageBtn,
+                    currentPage >= totalPages && styles.pageBtnDisabled,
+                    pressed && currentPage < totalPages && styles.pressed,
+                  ]}
+                >
+                  <Text style={styles.pageBtnText}>Next ›</Text>
+                </Pressable>
+              </View>
+            ) : null}
           </>
         )}
       </ScrollView>
@@ -511,6 +545,40 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
     color: '#FFFFFF',
+  },
+  pagination: {
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 18,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E8EEF5',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  pageBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: '#EEF4FB',
+  },
+  pageBtnDisabled: {
+    opacity: 0.4,
+  },
+  pageBtnText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: NAMIBIA_BLUE,
+  },
+  pageStatus: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#64748B',
   },
   pressed: {
     opacity: 0.85,

@@ -4,8 +4,10 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   FlatList,
+  Modal,
   Platform,
   Pressable,
   RefreshControl,
@@ -18,13 +20,23 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ExploreMapPane } from "@/components/ExploreMapPane";
+import { clearSubjectLocalData } from "@/constants/clearSubjectData";
 import { syncExploreEntries } from "@/constants/exploreSync";
+import { syncCurriculum } from "@/constants/curriculumSync";
+import { syncLessons } from "@/constants/lessonSync";
 import {
   CURRICULUM_SUBJECTS,
   getGradeLabel,
+  getSubjectsForGrade,
   resolveGradeId,
   SubjectOption,
 } from "@/constants/curriculum";
+import { isDeviceOnline } from "@/constants/network";
+import {
+  bootstrapLearnerOffline,
+  type OfflineBootstrapProgress,
+} from "@/constants/offlineBootstrap";
+import { hydrateOfflineFiles } from "@/constants/offlineFiles";
 import { getUserPath } from "@/constants/userPath";
 
 // Official Namibian colors
@@ -38,7 +50,9 @@ type CategoryFilter =
   | "Sciences"
   | "Languages"
   | "Commercials"
-  | "Humanities";
+  | "Humanities"
+  | "Arts"
+  | "Life Skills";
 type MainTab = "home" | "explore";
 
 export default function HomeScreen() {
@@ -59,6 +73,10 @@ export default function HomeScreen() {
   const [searchQuery, setSearchQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState<CategoryFilter>("All");
   const [refreshing, setRefreshing] = useState(false);
+  const [showManageSubjects, setShowManageSubjects] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] =
+    useState<OfflineBootstrapProgress | null>(null);
 
   // Load persistence data
   const loadUserData = async () => {
@@ -124,6 +142,12 @@ export default function HomeScreen() {
   }, [router]);
 
   useEffect(() => {
+    void hydrateOfflineFiles();
+    void syncLessons();
+    void syncCurriculum();
+  }, []);
+
+  useEffect(() => {
     if (activeTab === "explore") {
       void syncExploreEntries(true);
     }
@@ -131,7 +155,7 @@ export default function HomeScreen() {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await loadUserData();
+    await Promise.all([loadUserData(), syncLessons(true), syncCurriculum(true)]);
     setRefreshing(false);
   };
 
@@ -166,19 +190,129 @@ export default function HomeScreen() {
     return "Good Evening";
   }, []);
 
-  const categories: CategoryFilter[] = [
-    "All",
-    "Sciences",
-    "Languages",
-    "Commercials",
-    "Humanities",
-  ];
+  const categories: CategoryFilter[] = useMemo(() => {
+    const present = new Set(userSubjects.map((s) => s.category));
+    const order: Exclude<CategoryFilter, "All">[] = [
+      "Languages",
+      "Sciences",
+      "Arts",
+      "Life Skills",
+      "Commercials",
+      "Humanities",
+    ];
+    return ["All", ...order.filter((cat) => present.has(cat))];
+  }, [userSubjects]);
 
-  const handleNotificationPress = () => {
+  const availableToAdd = useMemo(() => {
+    const selected = new Set(selectedSubjectIds);
+    return getSubjectsForGrade(activeGradeId).filter((s) => !selected.has(s.id));
+  }, [activeGradeId, selectedSubjectIds]);
+
+  const persistSubjectIds = async (nextIds: string[]) => {
+    setSelectedSubjectIds(nextIds);
+    try {
+      await AsyncStorage.setItem("user_subjects", JSON.stringify(nextIds));
+    } catch (e) {
+      console.warn("Failed to save subjects", e);
+    }
+  };
+
+  const handleAddSubject = (subject: SubjectOption) => {
+    if (selectedSubjectIds.includes(subject.id) || isDownloading) return;
+
     Alert.alert(
-      "Notifications 🔔",
-      "You are up to date! New curriculum materials, study guides, and exam question papers will appear here.",
-      [{ text: "Got it", style: "default" }],
+      `Add ${subject.name}?`,
+      "Internet is required to download this subject's content for offline study.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Download & add",
+          onPress: () => {
+            void (async () => {
+              const online = await isDeviceOnline();
+              if (!online) {
+                Alert.alert(
+                  "Internet required",
+                  "Connect to the internet to add a subject. Content is saved on your device for offline learning.",
+                );
+                return;
+              }
+
+              const nextIds = [...selectedSubjectIds, subject.id];
+              setIsDownloading(true);
+              setDownloadProgress({
+                phase: "checking",
+                message: `Downloading ${subject.name}…`,
+              });
+
+              try {
+                const result = await bootstrapLearnerOffline({
+                  gradeId: activeGradeId,
+                  subjectIds: nextIds,
+                  onProgress: setDownloadProgress,
+                });
+                if (!result.ok) {
+                  Alert.alert(
+                    "Download failed",
+                    result.error ||
+                      "Could not download this subject. Check your connection and try again.",
+                  );
+                  return;
+                }
+                await persistSubjectIds(nextIds);
+                await AsyncStorage.setItem("offline_content_ready", "true");
+              } finally {
+                setIsDownloading(false);
+                setDownloadProgress(null);
+              }
+            })();
+          },
+        },
+      ],
+    );
+  };
+
+  const handleRemoveSubject = (subject: SubjectOption) => {
+    if (selectedSubjectIds.length <= 1) {
+      Alert.alert(
+        "Keep at least one subject",
+        "You need at least one subject on your home page. Add another subject before removing this one.",
+      );
+      return;
+    }
+
+    Alert.alert(
+      `Remove ${subject.name}?`,
+      `If you remove this subject, all of its data on this device will be cleared — including lesson progress, quiz scores, and reading history.\n\nThis cannot be undone.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Remove & clear data",
+          style: "destructive",
+          onPress: () => {
+            void (async () => {
+              await clearSubjectLocalData(activeGradeId, subject.id);
+              const next = selectedSubjectIds.filter((id) => id !== subject.id);
+              await persistSubjectIds(next);
+            })();
+          },
+        },
+      ],
+    );
+  };
+
+  const handleEditSetup = () => {
+    Alert.alert(
+      "Edit your setup?",
+      `You are currently on ${activeGrade} with ${userSubjects.length} subject${userSubjects.length === 1 ? "" : "s"}.\n\nContinue to change your learning path, grade, or subjects?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Edit setup",
+          style: "default",
+          onPress: () => router.push("/choose-path"),
+        },
+      ],
     );
   };
 
@@ -203,20 +337,17 @@ export default function HomeScreen() {
               </View>
             </View>
 
-            <View style={styles.navRight}>
-              <Pressable
-                onPress={handleNotificationPress}
-                style={({ pressed }) => [
-                  styles.notificationBtn,
-                  pressed && styles.pressedState,
-                ]}
-                hitSlop={8}
-                accessibilityLabel="Notifications"
-              >
-                <Text style={styles.notificationIcon}>🔔</Text>
-                <View style={styles.notificationBadgeDot} />
-              </Pressable>
-            </View>
+            <Pressable
+              onPress={handleEditSetup}
+              style={({ pressed }) => [
+                styles.navEditSetupBtn,
+                pressed && styles.pressedState,
+              ]}
+              hitSlop={8}
+              accessibilityLabel="Edit setup"
+            >
+              <Text style={styles.navEditSetupText}>Edit setup</Text>
+            </Pressable>
           </View>
 
           <FlatList
@@ -260,32 +391,6 @@ export default function HomeScreen() {
                               : "SETUP COMPLETED"}
                           </Text>
                         </View>
-
-                        <Pressable
-                          onPress={() => {
-                            Alert.alert(
-                              "Profile reset",
-                              "Your current curriculum setup will be cleared. Continue?",
-                              [
-                                { text: "Cancel", style: "cancel" },
-                                {
-                                  text: "Continue",
-                                  style: "default",
-                                  onPress: () => router.push("/choose-path"),
-                                },
-                              ],
-                            );
-                          }}
-                          style={({ pressed }) => [
-                            styles.editCurriculumBtn,
-                            pressed && styles.pressedState,
-                          ]}
-                          hitSlop={8}
-                        >
-                          <Text style={styles.editCurriculumText}>
-                            Edit Setup ✏️
-                          </Text>
-                        </Pressable>
                       </View>
 
                       {/* Dynamic Greeting Title */}
@@ -299,7 +404,7 @@ export default function HomeScreen() {
                       <Text style={styles.greetingSubtitle}>
                         {isReturningUser
                           ? "Welcome back! Your selected curriculum is ready for offline study. Pick a subject below to continue."
-                          : "Here is your personalized Namibian curriculum. Access approved textbooks, past exam papers, and marking memos."}
+                          : "Here is your personalized Namibian curriculum. Access subject materials, past exam papers, and quizzes from your teachers."}
                       </Text>
 
                       {/* Info Pill Ribbon */}
@@ -320,6 +425,20 @@ export default function HomeScreen() {
                           </Text>
                         </View>
                       </View>
+
+                      <Pressable
+                        onPress={handleEditSetup}
+                        style={({ pressed }) => [
+                          styles.editSetupCta,
+                          pressed && styles.pressedState,
+                        ]}
+                        accessibilityLabel="Edit setup"
+                      >
+                        <Text style={styles.editSetupCtaText}>
+                          Edit grade & subjects
+                        </Text>
+                        <Text style={styles.editSetupCtaArrow}>→</Text>
+                      </Pressable>
                     </View>
                   </LinearGradient>
                 </View>
@@ -376,7 +495,7 @@ export default function HomeScreen() {
 
                 {/* Section Header */}
                 <View style={styles.sectionHeaderRow}>
-                  <View>
+                  <View style={{ flex: 1 }}>
                     <Text style={styles.sectionTitle}>
                       Your Selected Subjects
                     </Text>
@@ -385,7 +504,7 @@ export default function HomeScreen() {
                     </Text>
                   </View>
                   <Text style={styles.subjectCountBadge}>
-                    {filteredSubjects.length} of {userSubjects.length}
+                    {userSubjects.length}
                   </Text>
                 </View>
               </View>
@@ -404,6 +523,7 @@ export default function HomeScreen() {
                     },
                   });
                 }}
+                onRemove={() => handleRemoveSubject(item)}
               />
             )}
             ListEmptyComponent={
@@ -418,23 +538,145 @@ export default function HomeScreen() {
                     : "You have not selected any subjects in this category."}
                 </Text>
                 <Pressable
-                  onPress={() => {
-                    setSearchQuery("");
-                    setActiveCategory("All");
-                  }}
+                  onPress={() => setShowManageSubjects(true)}
                   style={styles.resetFilterBtn}
                 >
                   <Text style={styles.resetFilterBtnText}>
-                    Show All Selected Subjects
+                    Add subjects
                   </Text>
                 </Pressable>
               </View>
             }
           />
+
+          <Modal
+            visible={showManageSubjects}
+            animationType="slide"
+            transparent
+            onRequestClose={() => setShowManageSubjects(false)}
+          >
+            <View style={styles.manageBackdrop}>
+              <View
+                style={[
+                  styles.manageSheet,
+                  { paddingBottom: Math.max(insets.bottom, 16) },
+                ]}
+              >
+                <View style={styles.manageHeader}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.manageTitle}>Manage subjects</Text>
+                    <Text style={styles.manageSubtitle}>
+                      Add more for {activeGrade}, or remove one (clears its data)
+                    </Text>
+                  </View>
+                  <Pressable
+                    onPress={() => setShowManageSubjects(false)}
+                    hitSlop={10}
+                  >
+                    <Text style={styles.manageClose}>✕</Text>
+                  </Pressable>
+                </View>
+
+                <ScrollView
+                  style={styles.manageScroll}
+                  showsVerticalScrollIndicator={false}
+                >
+                  <Text style={styles.manageSectionLabel}>
+                    Your subjects ({userSubjects.length})
+                  </Text>
+                  {userSubjects.map((subject) => (
+                    <View key={subject.id} style={styles.manageRow}>
+                      <View style={styles.manageRowText}>
+                        <Text style={styles.manageRowTitle}>
+                          {subject.icon} {subject.name}
+                        </Text>
+                        <Text style={styles.manageRowMeta}>
+                          {subject.category} · {subject.code}
+                        </Text>
+                      </View>
+                      <Pressable
+                        onPress={() => handleRemoveSubject(subject)}
+                        style={styles.manageRemoveBtn}
+                      >
+                        <Text style={styles.manageRemoveBtnText}>Remove</Text>
+                      </Pressable>
+                    </View>
+                  ))}
+
+                  <Text style={[styles.manageSectionLabel, { marginTop: 18 }]}>
+                    Add more ({availableToAdd.length})
+                  </Text>
+                  {availableToAdd.length === 0 ? (
+                    <Text style={styles.manageEmptyAdd}>
+                      All subjects for this grade are already on your list.
+                    </Text>
+                  ) : (
+                    availableToAdd.map((subject) => (
+                      <View key={subject.id} style={styles.manageRow}>
+                        <View style={styles.manageRowText}>
+                          <Text style={styles.manageRowTitle}>
+                            {subject.icon} {subject.name}
+                          </Text>
+                          <Text style={styles.manageRowMeta}>
+                            {subject.category} · {subject.code}
+                          </Text>
+                        </View>
+                        <Pressable
+                          onPress={() => handleAddSubject(subject)}
+                          style={styles.manageAddBtn}
+                        >
+                          <Text style={styles.manageAddBtnText}>Add</Text>
+                        </Pressable>
+                      </View>
+                    ))
+                  )}
+                </ScrollView>
+
+                <Pressable
+                  onPress={() => setShowManageSubjects(false)}
+                  style={styles.manageDoneBtn}
+                >
+                  <Text style={styles.manageDoneBtnText}>Done</Text>
+                </Pressable>
+              </View>
+            </View>
+          </Modal>
+
+          <Modal visible={isDownloading} transparent animationType="fade">
+            <View style={styles.downloadBackdrop}>
+              <View style={styles.downloadCard}>
+                <ActivityIndicator size="large" color={NAMIBIA_BLUE} />
+                <Text style={styles.downloadTitle}>Saving for offline</Text>
+                <Text style={styles.downloadMessage}>
+                  {downloadProgress?.message ||
+                    "Downloading subject content for offline study…"}
+                </Text>
+                {downloadProgress?.total ? (
+                  <Text style={styles.downloadCount}>
+                    {downloadProgress.current || 0} / {downloadProgress.total}
+                  </Text>
+                ) : null}
+              </View>
+            </View>
+          </Modal>
         </View>
       ) : (
         <ExploreMapPane bottomOffset={Math.max(insets.bottom, 10) + 72} />
       )}
+
+      {activeTab === "home" ? (
+        <Pressable
+          onPress={() => setShowManageSubjects(true)}
+          style={({ pressed }) => [
+            styles.manageFab,
+            { bottom: Math.max(insets.bottom, 10) + 78 },
+            pressed && styles.pressedState,
+          ]}
+          accessibilityLabel="Add or remove subjects"
+        >
+          <Text style={styles.manageFabText}>±</Text>
+        </Pressable>
+      ) : null}
 
       {/* Bottom Tabs: Home | Explore */}
       <View
@@ -510,89 +752,94 @@ interface SubjectLandscapeCardProps {
   subject: SubjectOption;
   grade: string;
   onPress: () => void;
+  onRemove?: () => void;
 }
 
 function SubjectLandscapeCard({
   subject,
   grade,
   onPress,
+  onRemove,
 }: SubjectLandscapeCardProps) {
   return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.cardContainer,
-        pressed && styles.cardPressed,
-      ]}
-    >
-      {/* Background Namibian Photographic Image */}
-      <Image
-        source={{ uri: subject.namibianImage }}
-        style={StyleSheet.absoluteFill}
-        contentFit="cover"
-        transition={300}
-        priority="high"
-      />
+    <View style={styles.cardContainer}>
+      <Pressable
+        onPress={onPress}
+        style={({ pressed }) => [styles.cardPressArea, pressed && styles.cardPressed]}
+      >
+        <Image
+          source={{ uri: subject.namibianImage }}
+          style={StyleSheet.absoluteFill}
+          contentFit="cover"
+          transition={300}
+          priority="high"
+        />
 
-      {/* Multi-Stop Namibian Tinted Gradient for Crystal Clear Text Contrast */}
-      <LinearGradient
-        colors={[
-          "rgba(15, 23, 42, 0.25)",
-          "rgba(0, 43, 127, 0.72)",
-          "rgba(2, 6, 23, 0.94)",
-        ]}
-        locations={[0, 0.45, 1]}
-        style={StyleSheet.absoluteFill}
-      />
+        <LinearGradient
+          colors={[
+            "rgba(15, 23, 42, 0.25)",
+            "rgba(0, 43, 127, 0.72)",
+            "rgba(2, 6, 23, 0.94)",
+          ]}
+          locations={[0, 0.45, 1]}
+          style={StyleSheet.absoluteFill}
+        />
 
-      {/* Namibian Yellow Sun Top Accent Stripe */}
-      <View style={styles.cardSunBar} />
+        <View style={styles.cardSunBar} />
 
-      {/* Foreground Content */}
-      <View style={styles.cardContent}>
-        {/* Top Badges Row */}
-        <View style={styles.cardTopRow}>
-          <View style={styles.badgePill}>
-            <Text style={styles.badgeIcon}>{subject.icon}</Text>
-            <Text style={styles.badgeCategoryText}>
-              {subject.category} • {subject.code}
-            </Text>
+        <View style={styles.cardContent}>
+          <View style={styles.cardTopRow}>
+            <View style={styles.badgePill}>
+              <Text style={styles.badgeIcon}>{subject.icon}</Text>
+              <Text style={styles.badgeCategoryText}>
+                {subject.category} • {subject.code}
+              </Text>
+            </View>
+
+            <View style={styles.filesCountPill}>
+              <Text style={styles.filesCountText}>
+                📄 {subject.availableMaterialsCount} Materials
+              </Text>
+            </View>
           </View>
 
-          <View style={styles.filesCountPill}>
-            <Text style={styles.filesCountText}>
-              📄 {subject.availableMaterialsCount} Materials
-            </Text>
-          </View>
-        </View>
-
-        {/* Middle: Namibian Contextual Landscape Reference */}
-        <View style={styles.cardMiddleRow}>
-          <View style={styles.namibiaTag}>
-            <Text style={styles.namibiaFlagIcon}>🇳🇦</Text>
-            <Text style={styles.namibiaTagText} numberOfLines={1}>
-              {subject.namibianContext}
-            </Text>
-          </View>
-        </View>
-
-        {/* Bottom Row: Subject Name & Action Button */}
-        <View style={styles.cardBottomRow}>
-          <View style={styles.cardTitleBox}>
-            <Text style={styles.cardSubjectName} numberOfLines={1}>
-              {subject.name}
-            </Text>
-            <Text style={styles.cardGradeText}>
-              {grade} • Syllabi & Past Papers
-            </Text>
+          <View style={styles.cardMiddleRow}>
+            <View style={styles.namibiaTag}>
+              <Text style={styles.namibiaFlagIcon}>🇳🇦</Text>
+              <Text style={styles.namibiaTagText} numberOfLines={1}>
+                {subject.namibianContext}
+              </Text>
+            </View>
           </View>
 
-          <View style={styles.cardActionBtn}>
-            <Text style={styles.cardActionText}>Study →</Text>
+          <View style={styles.cardBottomRow}>
+            <View style={styles.cardTitleBox}>
+              <Text style={styles.cardSubjectName} numberOfLines={1}>
+                {subject.name}
+              </Text>
+              <Text style={styles.cardGradeText}>
+                {grade} • Syllabi & Past Papers
+              </Text>
+            </View>
+
+            <View style={styles.cardActionBtn}>
+              <Text style={styles.cardActionText}>Study →</Text>
+            </View>
           </View>
         </View>
-      </View>
-    </Pressable>
+      </Pressable>
+
+      {onRemove ? (
+        <Pressable
+          onPress={onRemove}
+          hitSlop={8}
+          style={styles.cardRemoveBtn}
+          accessibilityLabel={`Remove ${subject.name}`}
+        >
+          <Text style={styles.cardRemoveBtnText}>Remove</Text>
+        </Pressable>
+      ) : null}
+    </View>
   );
 }
 
@@ -641,53 +888,23 @@ const styles = StyleSheet.create({
     color: "#64748B",
     fontWeight: "500",
   },
-  navRight: {
-    flexDirection: "row",
-    alignItems: "center",
+  navEditSetupBtn: {
+    backgroundColor: NAMIBIA_YELLOW,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#E6B800",
   },
-  notificationBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "#FFFFFF",
-    borderWidth: 1.5,
-    borderColor: "#E2E8F0",
-    alignItems: "center",
-    justifyContent: "center",
-    position: "relative",
-    ...Platform.select({
-      ios: {
-        shadowColor: "#000",
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 4,
-      },
-      android: {
-        elevation: 2,
-      },
-      web: {
-        boxShadow: "0 2px 6px rgba(0,0,0,0.04)",
-      },
-    }),
-  },
-  notificationIcon: {
-    fontSize: 18,
-  },
-  notificationBadgeDot: {
-    position: "absolute",
-    top: 7,
-    right: 8,
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: NAMIBIA_RED,
-    borderWidth: 1.5,
-    borderColor: "#FFFFFF",
+  navEditSetupText: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: "#0B1B33",
   },
 
   // Header Section
   scrollListContent: {
-    paddingBottom: 32,
+    paddingBottom: 100,
   },
   headerSection: {
     paddingHorizontal: 18,
@@ -751,18 +968,25 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
     letterSpacing: 0.8,
   },
-  editCurriculumBtn: {
-    backgroundColor: "rgba(255, 255, 255, 0.2)",
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.35)",
+  editSetupCta: {
+    marginTop: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 14,
   },
-  editCurriculumText: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: "#FFFFFF",
+  editSetupCtaText: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: NAMIBIA_BLUE,
+  },
+  editSetupCtaArrow: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: NAMIBIA_BLUE,
   },
   greetingTitle: {
     fontSize: 22,
@@ -894,8 +1118,184 @@ const styles = StyleSheet.create({
     color: NAMIBIA_BLUE,
     backgroundColor: "#EFF6FF",
     paddingHorizontal: 10,
-    paddingVertical: 4,
+    paddingVertical: 6,
     borderRadius: 10,
+    overflow: "hidden",
+  },
+  manageFab: {
+    position: "absolute",
+    right: 18,
+    zIndex: 20,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: NAMIBIA_BLUE,
+    alignItems: "center",
+    justifyContent: "center",
+    ...Platform.select({
+      ios: {
+        shadowColor: NAMIBIA_BLUE,
+        shadowOffset: { width: 0, height: 6 },
+        shadowOpacity: 0.28,
+        shadowRadius: 10,
+      },
+      android: {
+        elevation: 8,
+      },
+      web: {
+        boxShadow: "0 8px 18px rgba(0, 43, 127, 0.28)",
+      },
+    }),
+  },
+  manageFabText: {
+    color: "#FFFFFF",
+    fontSize: 26,
+    fontWeight: "700",
+    marginTop: -2,
+  },
+  manageBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(11, 27, 51, 0.45)",
+    justifyContent: "flex-end",
+  },
+  manageSheet: {
+    backgroundColor: "#FFFFFF",
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    maxHeight: "82%",
+    paddingHorizontal: 18,
+    paddingTop: 16,
+  },
+  manageHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+    marginBottom: 12,
+  },
+  manageTitle: {
+    fontSize: 18,
+    fontWeight: "900",
+    color: "#0F172A",
+  },
+  manageSubtitle: {
+    fontSize: 13,
+    color: "#64748B",
+    marginTop: 4,
+    lineHeight: 18,
+  },
+  manageClose: {
+    fontSize: 18,
+    color: "#64748B",
+    fontWeight: "700",
+    padding: 4,
+  },
+  manageScroll: {
+    maxHeight: 420,
+  },
+  manageSectionLabel: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: NAMIBIA_BLUE,
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
+    marginBottom: 8,
+  },
+  manageRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F1F5F9",
+  },
+  manageRowText: {
+    flex: 1,
+  },
+  manageRowTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  manageRowMeta: {
+    fontSize: 12,
+    color: "#94A3B8",
+    marginTop: 2,
+    fontWeight: "600",
+  },
+  manageRemoveBtn: {
+    backgroundColor: "#FEE2E2",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+  },
+  manageRemoveBtnText: {
+    color: NAMIBIA_RED,
+    fontWeight: "800",
+    fontSize: 12,
+  },
+  manageAddBtn: {
+    backgroundColor: "#E6F6ED",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+  },
+  manageAddBtnText: {
+    color: "#007A36",
+    fontWeight: "800",
+    fontSize: 12,
+  },
+  manageEmptyAdd: {
+    fontSize: 13,
+    color: "#94A3B8",
+    marginBottom: 8,
+    lineHeight: 19,
+  },
+  manageDoneBtn: {
+    marginTop: 14,
+    backgroundColor: NAMIBIA_BLUE,
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: "center",
+  },
+  manageDoneBtnText: {
+    color: "#FFFFFF",
+    fontWeight: "800",
+    fontSize: 15,
+  },
+  downloadBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(11, 27, 51, 0.55)",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 28,
+  },
+  downloadCard: {
+    width: "100%",
+    maxWidth: 340,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 22,
+    paddingHorizontal: 22,
+    paddingVertical: 24,
+    alignItems: "center",
+  },
+  downloadTitle: {
+    marginTop: 16,
+    fontSize: 18,
+    fontWeight: "900",
+    color: "#0F172A",
+  },
+  downloadMessage: {
+    marginTop: 8,
+    fontSize: 14,
+    lineHeight: 20,
+    color: "#64748B",
+    textAlign: "center",
+  },
+  downloadCount: {
+    marginTop: 12,
+    fontSize: 13,
+    fontWeight: "800",
+    color: NAMIBIA_BLUE,
   },
 
   // Landscape Subject Cards with Namibian Background Images
@@ -922,6 +1322,9 @@ const styles = StyleSheet.create({
       },
     }),
   },
+  cardPressArea: {
+    flex: 1,
+  },
   cardPressed: {
     opacity: 0.92,
     transform: [{ scale: 0.985 }],
@@ -945,6 +1348,23 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    gap: 8,
+    paddingRight: 72,
+  },
+  cardRemoveBtn: {
+    position: "absolute",
+    top: 14,
+    right: 14,
+    zIndex: 5,
+    backgroundColor: "rgba(210, 16, 52, 0.95)",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+  },
+  cardRemoveBtnText: {
+    color: "#FFFFFF",
+    fontSize: 11,
+    fontWeight: "800",
   },
   badgePill: {
     flexDirection: "row",

@@ -85,6 +85,44 @@ export default function RegionSiteScreen() {
 
   const regionName = params.regionName || 'Namibia';
   const narrative = site.fullDescription || site.description;
+  const data = site.categoryData || {};
+  const detailRows: { label: string; value: string }[] = [];
+  if (data.year != null && String(data.year).trim()) {
+    detailRows.push({ label: 'Year', value: String(data.year) });
+  }
+  if (data.geological_age && String(data.geological_age).trim()) {
+    detailRows.push({ label: 'Geological age', value: String(data.geological_age) });
+  }
+  if (data.climate && String(data.climate).trim()) {
+    detailRows.push({ label: 'Climate', value: String(data.climate) });
+  }
+  if (data.conservation && String(data.conservation).trim()) {
+    detailRows.push({ label: 'Conservation', value: String(data.conservation) });
+  }
+  if (data.classification_type && String(data.classification_type).trim()) {
+    detailRows.push({ label: 'Classification', value: String(data.classification_type) });
+  }
+  if (data.season && String(data.season).trim()) {
+    detailRows.push({ label: 'Season', value: String(data.season) });
+  }
+  if (data.frequency && String(data.frequency).trim()) {
+    detailRows.push({ label: 'Frequency', value: String(data.frequency) });
+  }
+  if (data.admission_type && String(data.admission_type).trim()) {
+    detailRows.push({
+      label: 'Admission',
+      value: String(data.admission_type) === 'paid' ? 'Paid' : 'Public / Free',
+    });
+  }
+  if (data.venue && String(data.venue).trim()) {
+    detailRows.push({ label: 'Venue', value: String(data.venue) });
+  }
+  if (data.ingredients && String(data.ingredients).trim()) {
+    detailRows.push({ label: 'Ingredients', value: String(data.ingredients) });
+  }
+  if (data.preparation && String(data.preparation).trim()) {
+    detailRows.push({ label: 'Preparation', value: String(data.preparation) });
+  }
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -130,6 +168,18 @@ export default function RegionSiteScreen() {
           <Text style={styles.sectionLabel}>About this place</Text>
           <Text style={styles.description}>{narrative}</Text>
 
+          {detailRows.length > 0 ? (
+            <>
+              <Text style={styles.sectionLabel}>Details</Text>
+              {detailRows.map((row) => (
+                <View key={row.label} style={styles.detailBlock}>
+                  <Text style={styles.detailLabel}>{row.label}</Text>
+                  <Text style={styles.detailValue}>{row.value}</Text>
+                </View>
+              ))}
+            </>
+          ) : null}
+
           {site.featuredImage?.credit ? (
             <Text style={styles.credit}>Photo: {site.featuredImage.credit}</Text>
           ) : null}
@@ -154,33 +204,44 @@ export default function RegionSiteScreen() {
             </>
           ) : null}
 
-          <Text style={styles.sectionLabel}>Location on map</Text>
-          {site.address ? <Text style={styles.addressText}>{site.address}</Text> : null}
-          <Text style={styles.coordsText}>
-            {site.latitude.toFixed(4)}°, {site.longitude.toFixed(4)}°
-          </Text>
+          {site.hasLocation &&
+          site.latitude != null &&
+          site.longitude != null ? (
+            <>
+              <Text style={styles.sectionLabel}>Location on map</Text>
+              {site.address ? <Text style={styles.addressText}>{site.address}</Text> : null}
+              <Text style={styles.coordsText}>
+                {site.latitude.toFixed(4)}°, {site.longitude.toFixed(4)}°
+              </Text>
 
-          <View style={styles.mapCard}>
-            <OsmMapView
-              style={styles.map}
-              camera={{
-                latitude: site.latitude,
-                longitude: site.longitude,
-                latitudeDelta: 0.18,
-                longitudeDelta: 0.18,
-              }}
-              markers={[
-                {
-                  id: site.id,
-                  latitude: site.latitude,
-                  longitude: site.longitude,
-                  title: site.name,
-                  subtitle: subtopicTitle,
-                  selected: true,
-                },
-              ]}
-            />
-          </View>
+              <View style={styles.mapCard}>
+                <OsmMapView
+                  style={styles.map}
+                  camera={{
+                    latitude: site.latitude,
+                    longitude: site.longitude,
+                    latitudeDelta: 0.18,
+                    longitudeDelta: 0.18,
+                  }}
+                  markers={[
+                    {
+                      id: site.id,
+                      latitude: site.latitude,
+                      longitude: site.longitude,
+                      title: site.name,
+                      subtitle: subtopicTitle,
+                      selected: true,
+                    },
+                  ]}
+                />
+              </View>
+            </>
+          ) : site.address ? (
+            <>
+              <Text style={styles.sectionLabel}>Location</Text>
+              <Text style={styles.addressText}>{site.address}</Text>
+            </>
+          ) : null}
         </View>
       </ScrollView>
     </View>
@@ -300,6 +361,27 @@ const styles = StyleSheet.create({
     color: '#334155',
     marginBottom: 10,
   },
+  detailBlock: {
+    marginBottom: 12,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  detailLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: MAP_PIN_PINK,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+    marginBottom: 4,
+  },
+  detailValue: {
+    fontSize: 14,
+    lineHeight: 21,
+    color: '#334155',
+  },
   credit: {
     fontSize: 12,
     color: '#94A3B8',
@@ -322,31 +404,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     color: NAMIBIA_BLUE,
-  },
-  detailCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    padding: 14,
-    marginBottom: 18,
-    gap: 12,
-  },
-  detailRow: {
-    gap: 4,
-  },
-  detailLabel: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#64748B',
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-  },
-  detailValue: {
-    fontSize: 14,
-    lineHeight: 20,
-    color: '#0F172A',
-    fontWeight: '600',
   },
   galleryRow: {
     gap: 10,

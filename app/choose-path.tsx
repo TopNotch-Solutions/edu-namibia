@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -12,11 +13,19 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { NAMIBIA, QUIZ_GRADIENT } from '@/constants/namibiaTheme';
 import { getUserPath, setUserPath, UserPath } from '@/constants/userPath';
 
-const NAMIBIA_BLUE = '#002B7F';
-const NAMIBIA_YELLOW = '#FFCE00';
-const MAP_PIN_PINK = '#E84A7F';
+function FlagStrip() {
+  return (
+    <View style={styles.flagStrip}>
+      <View style={[styles.flagBand, { backgroundColor: NAMIBIA.blue }]} />
+      <View style={[styles.flagBand, { backgroundColor: NAMIBIA.red }]} />
+      <View style={[styles.flagBand, { backgroundColor: NAMIBIA.green }]} />
+      <View style={[styles.flagBand, { backgroundColor: NAMIBIA.yellow }]} />
+    </View>
+  );
+}
 
 export default function ChoosePathScreen() {
   const router = useRouter();
@@ -77,22 +86,26 @@ export default function ChoosePathScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
       <LinearGradient
-        colors={['#EEF3FB', '#F8FAFC', '#FFFFFF']}
+        colors={[NAMIBIA.sand, NAMIBIA.blueSoft, NAMIBIA.white]}
+        locations={[0, 0.45, 1]}
         style={StyleSheet.absoluteFill}
       />
 
-      {returnRoute && (
+      {returnRoute ? (
         <Pressable
           onPress={goBack}
           style={({ pressed }) => [styles.backBar, pressed && styles.pressed]}
           hitSlop={10}
         >
-          <Text style={styles.backBarText}>← Back</Text>
+          <Ionicons name="arrow-back" size={18} color={NAMIBIA.ink} />
+          <Text style={styles.backBarText}>Back</Text>
         </Pressable>
-      )}
+      ) : null}
 
       <View style={styles.content}>
-        <Text style={styles.eyebrow}>Edu-Learning Namibia</Text>
+        <View style={styles.kickerPill}>
+          <Text style={styles.eyebrow}>Edu-Learning Namibia</Text>
+        </View>
         <Text style={styles.title}>How will you use the app?</Text>
         <Text style={styles.subtitle}>
           Learners study the curriculum. Explorers discover Namibia on the map.
@@ -103,16 +116,21 @@ export default function ChoosePathScreen() {
           style={({ pressed }) => [styles.card, pressed && styles.pressed]}
         >
           <LinearGradient
-            colors={[NAMIBIA_BLUE, '#1A3B8B']}
+            colors={[...QUIZ_GRADIENT]}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
             style={styles.cardGradient}
           >
-            <View style={styles.cardSunBar} />
-            <Text style={styles.cardBadge}>Learner</Text>
+            <FlagStrip />
+            <View style={styles.cardBadgeRow}>
+              <Text style={styles.cardBadge}>Learner</Text>
+              <View style={styles.cardIconCircle}>
+                <Ionicons name="school-outline" size={18} color={NAMIBIA.yellow} />
+              </View>
+            </View>
             <Text style={styles.cardTitle}>I am a Learner</Text>
             <Text style={styles.cardText}>
-              Select your grade and subjects to study textbooks, past papers, and quizzes.
+              Select your grade and subjects to study materials, past papers, and quizzes.
             </Text>
             <Text style={styles.cardCta}>Continue to grade selection →</Text>
           </LinearGradient>
@@ -123,13 +141,18 @@ export default function ChoosePathScreen() {
           style={({ pressed }) => [styles.card, pressed && styles.pressed]}
         >
           <View style={styles.cardLight}>
-            <View style={[styles.cardSunBar, styles.cardSunBarPink]} />
-            <Text style={[styles.cardBadge, styles.cardBadgeDark]}>Explorer</Text>
+            <FlagStrip />
+            <View style={styles.cardBadgeRow}>
+              <Text style={[styles.cardBadge, styles.cardBadgeDark]}>Explorer</Text>
+              <View style={[styles.cardIconCircle, styles.cardIconCircleLight]}>
+                <Ionicons name="map-outline" size={18} color={NAMIBIA.greenDeep} />
+              </View>
+            </View>
             <Text style={[styles.cardTitle, styles.cardTitleDark]}>I am an Explorer</Text>
             <Text style={[styles.cardText, styles.cardTextDark]}>
-              Discover Namibia’s regions on the map — geography, culture, history, events, food, and safety.
+              Discover Namibia’s regions on the map — geography, culture, history, events, and food.
             </Text>
-            <Text style={[styles.cardCta, styles.cardCtaPink]}>Open Namibia Explore →</Text>
+            <Text style={[styles.cardCta, styles.cardCtaGreen]}>Open Namibia Explore →</Text>
           </View>
         </Pressable>
       </View>
@@ -140,7 +163,19 @@ export default function ChoosePathScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8FAFC',
+    backgroundColor: NAMIBIA.sand,
+  },
+  flagStrip: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 4,
+    flexDirection: 'row',
+    zIndex: 2,
+  },
+  flagBand: {
+    flex: 1,
   },
   backBar: {
     alignSelf: 'flex-start',
@@ -149,50 +184,62 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 9,
     borderRadius: 999,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: NAMIBIA.white,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: NAMIBIA.line,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   backBarText: {
     fontSize: 13.5,
     fontWeight: '700',
-    color: '#334155',
+    color: NAMIBIA.ink,
   },
   content: {
     flex: 1,
     paddingHorizontal: 20,
     justifyContent: 'center',
   },
+  kickerPill: {
+    alignSelf: 'flex-start',
+    backgroundColor: NAMIBIA.blueSoft,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: NAMIBIA.line,
+  },
   eyebrow: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800',
-    color: MAP_PIN_PINK,
-    letterSpacing: 1,
+    color: NAMIBIA.blue,
+    letterSpacing: 0.8,
     textTransform: 'uppercase',
-    marginBottom: 8,
   },
   title: {
     fontSize: 28,
     fontWeight: '900',
-    color: '#0F172A',
+    color: NAMIBIA.ink,
     letterSpacing: -0.5,
     marginBottom: 8,
   },
   subtitle: {
     fontSize: 14,
-    color: '#64748B',
+    color: NAMIBIA.muted,
     lineHeight: 21,
     marginBottom: 24,
   },
   card: {
-    borderRadius: 24,
+    borderRadius: 22,
     overflow: 'hidden',
     marginBottom: 14,
     ...Platform.select({
       ios: {
-        shadowColor: '#0F172A',
+        shadowColor: NAMIBIA.blueDeep,
         shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.12,
+        shadowOpacity: 0.16,
         shadowRadius: 16,
       },
       android: {
@@ -202,63 +249,70 @@ const styles = StyleSheet.create({
   },
   cardGradient: {
     padding: 20,
-    minHeight: 168,
+    paddingTop: 24,
+    minHeight: 176,
   },
   cardLight: {
     padding: 20,
-    minHeight: 168,
-    backgroundColor: '#FFFFFF',
+    paddingTop: 24,
+    minHeight: 176,
+    backgroundColor: NAMIBIA.white,
     borderWidth: 1.5,
-    borderColor: '#E2E8F0',
-    borderRadius: 24,
+    borderColor: NAMIBIA.line,
+    borderRadius: 22,
   },
-  cardSunBar: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 4,
-    backgroundColor: NAMIBIA_YELLOW,
+  cardBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
   },
-  cardSunBarPink: {
-    backgroundColor: MAP_PIN_PINK,
+  cardIconCircle: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cardIconCircleLight: {
+    backgroundColor: NAMIBIA.greenSoft,
   },
   cardBadge: {
     fontSize: 11,
     fontWeight: '800',
-    color: NAMIBIA_YELLOW,
+    color: NAMIBIA.yellow,
     letterSpacing: 1,
     textTransform: 'uppercase',
-    marginBottom: 8,
   },
   cardBadgeDark: {
-    color: MAP_PIN_PINK,
+    color: NAMIBIA.greenDeep,
   },
   cardTitle: {
     fontSize: 22,
     fontWeight: '900',
-    color: '#FFFFFF',
+    color: NAMIBIA.white,
     marginBottom: 8,
   },
   cardTitleDark: {
-    color: '#0F172A',
+    color: NAMIBIA.ink,
   },
   cardText: {
     fontSize: 14,
-    color: '#E0E7FF',
+    color: 'rgba(255,255,255,0.82)',
     lineHeight: 20,
     marginBottom: 14,
   },
   cardTextDark: {
-    color: '#64748B',
+    color: NAMIBIA.muted,
   },
   cardCta: {
     fontSize: 14,
     fontWeight: '800',
-    color: '#FFFFFF',
+    color: NAMIBIA.white,
   },
-  cardCtaPink: {
-    color: NAMIBIA_BLUE,
+  cardCtaGreen: {
+    color: NAMIBIA.greenDeep,
   },
   pressed: {
     opacity: 0.9,
